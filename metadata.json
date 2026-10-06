@@ -1,0 +1,6 @@
+{
+  "name": "ZP Engineers Society Gadchiroli",
+  "description": "जिल्हा परिषद अभियंता व तांत्रिक कर्मचारी सहकारी पत संस्था मर्या. गडचिरोली - सभासद, मासिक वर्गणी, कर्ज लेजर आणि खर्च व्यवस्थापन प्रणाली.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

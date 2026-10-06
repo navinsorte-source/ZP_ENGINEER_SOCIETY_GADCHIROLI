@@ -1,0 +1,184 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Primitives & Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSocietyScoped(data) {
+      return data.ownerId is string && data.ownerId == 'zp-society-gadchiroli';
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidMember(data) {
+      return data.keys().hasAll(['id', 'name', 'designation', 'dob', 'joiningDate', 'status', 'share', 'ownerId'])
+        && data.keys().hasOnly(['id', 'name', 'designation', 'email', 'aadhaar', 'pan', 'loginUser', 'loginPass', 'dob', 'joiningDate', 'mobile', 'status', 'photo', 'officeAddress', 'homeAddress', 'nominee', 'nomineeRelation', 'share', 'ownerId'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 32
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.designation is string && data.designation.size() >= 1 && data.designation.size() <= 80
+        && (!('email' in data) || (data.email is string && data.email.size() <= 120))
+        && (!('aadhaar' in data) || (data.aadhaar is string && data.aadhaar.size() <= 32))
+        && (!('pan' in data) || (data.pan is string && data.pan.size() <= 32))
+        && (!('loginUser' in data) || (data.loginUser is string && data.loginUser.size() <= 64))
+        && (!('loginPass' in data) || (data.loginPass is string && data.loginPass.size() <= 64))
+        && data.dob is string && data.dob.size() <= 32
+        && data.joiningDate is string && data.joiningDate.size() <= 32
+        && (!('mobile' in data) || (data.mobile is string && data.mobile.size() <= 24))
+        && data.status in ['Active', 'Inactive']
+        && (!('photo' in data) || (data.photo is string && data.photo.size() <= 800000))
+        && (!('officeAddress' in data) || (data.officeAddress is string && data.officeAddress.size() <= 250))
+        && (!('homeAddress' in data) || (data.homeAddress is string && data.homeAddress.size() <= 250))
+        && (!('nominee' in data) || (data.nominee is string && data.nominee.size() <= 120))
+        && (!('nomineeRelation' in data) || (data.nomineeRelation is string && data.nomineeRelation.size() <= 64))
+        && data.share is number && data.share >= 0
+        && isSocietyScoped(data);
+    }
+
+    function isValidMonthlyContribution(data) {
+      return data.keys().hasAll(['memberDocId', 'receiptNo', 'date', 'memberId', 'memberName', 'month', 'amount', 'ownerId'])
+        && data.keys().hasOnly(['memberDocId', 'receiptNo', 'date', 'memberId', 'memberName', 'month', 'amount', 'note', 'ownerId'])
+        && isValidId(data.memberDocId)
+        && data.receiptNo is string && data.receiptNo.size() >= 1 && data.receiptNo.size() <= 64
+        && data.date is string && data.date.size() <= 32
+        && data.memberId is string && data.memberId.size() <= 32
+        && data.memberName is string && data.memberName.size() <= 120
+        && data.month is string && data.month.size() >= 1 && data.month.size() <= 48
+        && data.amount is number && data.amount >= 0
+        && (!('note' in data) || (data.note is string && data.note.size() <= 200))
+        && isSocietyScoped(data);
+    }
+
+    function isValidLoan(data) {
+      return data.keys().hasAll(['memberDocId', 'memberName', 'loanDate', 'principal', 'interestRate', 'months', 'totalInterest', 'totalPayable', 'monthlyEmi', 'startMonth', 'status', 'ownerId'])
+        && data.keys().hasOnly(['memberDocId', 'memberName', 'loanDate', 'principal', 'interestRate', 'months', 'totalInterest', 'totalPayable', 'monthlyEmi', 'startMonth', 'guarantor', 'mortgage', 'status', 'closureDate', 'closureAmount', 'closureRemarks', 'ownerId'])
+        && isValidId(data.memberDocId)
+        && data.memberName is string && data.memberName.size() <= 120
+        && data.loanDate is string && data.loanDate.size() <= 32
+        && data.principal is number && data.principal >= 0
+        && data.interestRate is number && data.interestRate >= 0
+        && data.months is number && data.months >= 1 && data.months <= 360
+        && data.totalInterest is number && data.totalInterest >= 0
+        && data.totalPayable is number && data.totalPayable >= 0
+        && data.monthlyEmi is number && data.monthlyEmi >= 0
+        && data.startMonth is string && data.startMonth.size() <= 48
+        && (!('guarantor' in data) || (data.guarantor is string && data.guarantor.size() <= 150))
+        && (!('mortgage' in data) || (data.mortgage is string && data.mortgage.size() <= 200))
+        && data.status in ['Active', 'Closed']
+        && (!('closureDate' in data) || (data.closureDate is string && data.closureDate.size() <= 32))
+        && (!('closureAmount' in data) || (data.closureAmount is number && data.closureAmount >= 0))
+        && (!('closureRemarks' in data) || (data.closureRemarks is string && data.closureRemarks.size() <= 250))
+        && isSocietyScoped(data);
+    }
+
+    function isValidLoanEmi(data) {
+      return data.keys().hasAll(['loanDocId', 'date', 'month', 'mode', 'amount', 'ownerId'])
+        && data.keys().hasOnly(['loanDocId', 'date', 'month', 'mode', 'chequeNo', 'amount', 'photo', 'ownerId'])
+        && isValidId(data.loanDocId)
+        && data.date is string && data.date.size() <= 32
+        && data.month is string && data.month.size() >= 1 && data.month.size() <= 48
+        && data.mode in ['Cash', 'Cheque', 'Bank Transfer', 'Salary Deduction']
+        && (!('chequeNo' in data) || (data.chequeNo is string && data.chequeNo.size() <= 64))
+        && data.amount is number && data.amount >= 0
+        && (!('photo' in data) || (data.photo is string && data.photo.size() <= 800000))
+        && isSocietyScoped(data);
+    }
+
+    function isValidExpense(data) {
+      return data.keys().hasAll(['voucherNo', 'date', 'category', 'description', 'amount', 'mode', 'ownerId'])
+        && data.keys().hasOnly(['voucherNo', 'date', 'category', 'description', 'amount', 'mode', 'photo', 'ownerId'])
+        && data.voucherNo is string && data.voucherNo.size() >= 1 && data.voucherNo.size() <= 64
+        && data.date is string && data.date.size() <= 32
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 120
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 250
+        && data.amount is number && data.amount >= 0
+        && data.mode in ['Cash', 'Bank Transfer', 'Cheque', 'UPI']
+        && (!('photo' in data) || (data.photo is string && data.photo.size() <= 800000))
+        && isSocietyScoped(data);
+    }
+
+    // 4. Collection Rules
+    match /test/{docId} {
+      allow get: if isValidId(docId);
+    }
+
+    match /members/{memberDocId} {
+      allow get: if isValidId(memberDocId) && isSocietyScoped(existing());
+      allow list: if isSocietyScoped(existing());
+      allow create: if isValidId(memberDocId) && isValidMember(incoming());
+      allow update: if isValidId(memberDocId)
+        && isValidMember(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['id', 'name', 'designation', 'email', 'aadhaar', 'pan', 'loginUser', 'loginPass', 'dob', 'joiningDate', 'mobile', 'status', 'photo', 'officeAddress', 'homeAddress', 'nominee', 'nomineeRelation', 'share']);
+      allow delete: if isValidId(memberDocId) && isSocietyScoped(existing());
+    }
+
+    match /monthly_contributions/{contribId} {
+      allow get: if isValidId(contribId) && isSocietyScoped(existing());
+      allow list: if isSocietyScoped(existing());
+      allow create: if isValidId(contribId)
+        && isValidMonthlyContribution(incoming())
+        && exists(/databases/$(database)/documents/members/$(incoming().memberDocId));
+      allow update: if isValidId(contribId)
+        && isValidMonthlyContribution(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().memberDocId == existing().memberDocId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'month', 'amount', 'note']);
+      allow delete: if isValidId(contribId) && isSocietyScoped(existing());
+    }
+
+    match /loans/{loanId} {
+      allow get: if isValidId(loanId) && isSocietyScoped(existing());
+      allow list: if isSocietyScoped(existing());
+      allow create: if isValidId(loanId)
+        && isValidLoan(incoming())
+        && exists(/databases/$(database)/documents/members/$(incoming().memberDocId));
+      allow update: if isValidId(loanId)
+        && isValidLoan(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().memberDocId == existing().memberDocId
+        && existing().status == 'Active'
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'closureDate', 'closureAmount', 'closureRemarks', 'guarantor', 'mortgage']);
+      allow delete: if isValidId(loanId) && isSocietyScoped(existing());
+    }
+
+    match /loan_emis/{emiId} {
+      allow get: if isValidId(emiId) && isSocietyScoped(existing());
+      allow list: if isSocietyScoped(existing());
+      allow create: if isValidId(emiId)
+        && isValidLoanEmi(incoming())
+        && exists(/databases/$(database)/documents/loans/$(incoming().loanDocId));
+      allow update: if isValidId(emiId)
+        && isValidLoanEmi(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().loanDocId == existing().loanDocId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'month', 'mode', 'chequeNo', 'amount', 'photo']);
+      allow delete: if isValidId(emiId) && isSocietyScoped(existing());
+    }
+
+    match /expenses/{expenseId} {
+      allow get: if isValidId(expenseId) && isSocietyScoped(existing());
+      allow list: if isSocietyScoped(existing());
+      allow create: if isValidId(expenseId) && isValidExpense(incoming());
+      allow update: if isValidId(expenseId)
+        && isValidExpense(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'category', 'description', 'amount', 'mode', 'photo']);
+      allow delete: if isValidId(expenseId) && isSocietyScoped(existing());
+    }
+  }
+}

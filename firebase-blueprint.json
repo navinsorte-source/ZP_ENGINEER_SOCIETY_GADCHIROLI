@@ -1,0 +1,127 @@
+{
+  "entities": {
+    "Member": {
+      "title": "Member",
+      "description": "Society member profile and account record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 120 },
+        "designation": { "type": "string", "maxLength": 80 },
+        "email": { "type": "string", "maxLength": 120 },
+        "aadhaar": { "type": "string", "maxLength": 32 },
+        "pan": { "type": "string", "maxLength": 32 },
+        "loginUser": { "type": "string", "maxLength": 64 },
+        "loginPass": { "type": "string", "maxLength": 64 },
+        "dob": { "type": "string", "maxLength": 32 },
+        "joiningDate": { "type": "string", "maxLength": 32 },
+        "mobile": { "type": "string", "maxLength": 24 },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "photo": { "type": "string", "maxLength": 800000 },
+        "officeAddress": { "type": "string", "maxLength": 250 },
+        "homeAddress": { "type": "string", "maxLength": 250 },
+        "nominee": { "type": "string", "maxLength": 120 },
+        "nomineeRelation": { "type": "string", "maxLength": 64 },
+        "share": { "type": "number" },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "name", "designation", "dob", "joiningDate", "status", "share", "ownerId"]
+    },
+    "MonthlyContribution": {
+      "title": "MonthlyContribution",
+      "description": "Monthly salary contribution deposit record for a member",
+      "type": "object",
+      "properties": {
+        "memberDocId": { "type": "string", "maxLength": 128 },
+        "receiptNo": { "type": "string", "maxLength": 64 },
+        "date": { "type": "string", "maxLength": 32 },
+        "memberId": { "type": "string", "maxLength": 32 },
+        "memberName": { "type": "string", "maxLength": 120 },
+        "month": { "type": "string", "maxLength": 48 },
+        "amount": { "type": "number" },
+        "note": { "type": "string", "maxLength": 200 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["memberDocId", "receiptNo", "date", "memberId", "memberName", "month", "amount", "ownerId"]
+    },
+    "Loan": {
+      "title": "Loan",
+      "description": "Loan sanction and ledger record for a member",
+      "type": "object",
+      "properties": {
+        "memberDocId": { "type": "string", "maxLength": 128 },
+        "memberName": { "type": "string", "maxLength": 120 },
+        "loanDate": { "type": "string", "maxLength": 32 },
+        "principal": { "type": "number" },
+        "interestRate": { "type": "number" },
+        "months": { "type": "number" },
+        "totalInterest": { "type": "number" },
+        "totalPayable": { "type": "number" },
+        "monthlyEmi": { "type": "number" },
+        "startMonth": { "type": "string", "maxLength": 48 },
+        "guarantor": { "type": "string", "maxLength": 150 },
+        "mortgage": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["Active", "Closed"] },
+        "closureDate": { "type": "string", "maxLength": 32 },
+        "closureAmount": { "type": "number" },
+        "closureRemarks": { "type": "string", "maxLength": 250 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["memberDocId", "memberName", "loanDate", "principal", "interestRate", "months", "totalInterest", "totalPayable", "monthlyEmi", "startMonth", "status", "ownerId"]
+    },
+    "LoanEmi": {
+      "title": "LoanEmi",
+      "description": "EMI installment payment record for a loan",
+      "type": "object",
+      "properties": {
+        "loanDocId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 32 },
+        "month": { "type": "string", "maxLength": 48 },
+        "mode": { "type": "string", "enum": ["Cash", "Cheque", "Bank Transfer", "Salary Deduction"] },
+        "chequeNo": { "type": "string", "maxLength": 64 },
+        "amount": { "type": "number" },
+        "photo": { "type": "string", "maxLength": 800000 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["loanDocId", "date", "month", "mode", "amount", "ownerId"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Office expense and digital voucher record",
+      "type": "object",
+      "properties": {
+        "voucherNo": { "type": "string", "maxLength": 64 },
+        "date": { "type": "string", "maxLength": 32 },
+        "category": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 250 },
+        "amount": { "type": "number" },
+        "mode": { "type": "string", "enum": ["Cash", "Bank Transfer", "Cheque", "UPI"] },
+        "photo": { "type": "string", "maxLength": 800000 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["voucherNo", "date", "category", "description", "amount", "mode", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/members/{memberDocId}": {
+      "schema": { "$ref": "#/entities/Member" },
+      "description": "Society members collection"
+    },
+    "/monthly_contributions/{contribId}": {
+      "schema": { "$ref": "#/entities/MonthlyContribution" },
+      "description": "Monthly salary contribution deposits"
+    },
+    "/loans/{loanId}": {
+      "schema": { "$ref": "#/entities/Loan" },
+      "description": "Member loan sanctions and balances"
+    },
+    "/loan_emis/{emiId}": {
+      "schema": { "$ref": "#/entities/LoanEmi" },
+      "description": "Loan EMI payment records"
+    },
+    "/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Digital vouchers and society expenses"
+    }
+  }
+}
