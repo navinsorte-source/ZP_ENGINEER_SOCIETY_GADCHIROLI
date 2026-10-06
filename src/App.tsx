@@ -56,6 +56,7 @@ import {
 import { AmortizationScheduleView } from './AmortizationScheduleView';
 import { MemberPortalView } from './MemberPortalView';
 import { MemberDetailModal, DEFAULT_AVATAR_URL } from './MemberDetailModal';
+import { FirebaseCloudModal } from './FirebaseCloudModal';
 import { seedSampleSocietyData } from './seedData';
 
 type ActiveTab = 'members' | 'monthly' | 'loans' | 'expenses' | 'memberPortal';
@@ -101,6 +102,7 @@ export default function App() {
   } | null>(null);
   const [viewingLoanLedger, setViewingLoanLedger] = useState<Loan | null>(null);
   const [viewingVoucherPhoto, setViewingVoucherPhoto] = useState<string | null>(null);
+  const [cloudModalOpen, setCloudModalOpen] = useState(false);
 
   // In-app confirmation & toast notifications
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
@@ -685,6 +687,16 @@ export default function App() {
 
           {/* Zone 3: Primary Actions */}
           <div className="flex items-center gap-2.5">
+            {isAdmin && (
+              <button
+                onClick={() => setCloudModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-extrabold transition cursor-pointer whitespace-nowrap shadow-2xs"
+                title="Google Firebase Cloud Status & Backup"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>☁️ Firebase Connected</span>
+              </button>
+            )}
             <PWAInstallButton />
             <button
               onClick={handleLogout}
@@ -1651,6 +1663,18 @@ export default function App() {
             },
           });
         }}
+      />
+
+      <FirebaseCloudModal
+        isOpen={cloudModalOpen}
+        onClose={() => setCloudModalOpen(false)}
+        members={members}
+        contributions={contributions}
+        loans={loans}
+        emis={emis}
+        expenses={expenses}
+        onSeedSampleData={handleSeedData}
+        onNotify={showToast}
       />
 
       {/* Digital Voucher Photo Lightbox */}
