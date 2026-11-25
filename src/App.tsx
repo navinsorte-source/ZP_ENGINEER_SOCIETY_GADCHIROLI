@@ -40,6 +40,7 @@ import { Expense, Loan, LoanEmi, Member, MonthlyContribution } from './types';
 import {
   buildWhatsAppBirthdayUrl,
   calculateAge,
+  computeDayWiseLoanSchedule,
   exportMembersToCSV,
   isBirthdayThisMonth,
   isTodayBirthday,
@@ -96,6 +97,7 @@ export default function App() {
 
   const [payEmiModalLoan, setPayEmiModalLoan] = useState<Loan | null>(null);
   const [payEmiDefaultMonth, setPayEmiDefaultMonth] = useState<string | undefined>(undefined);
+  const [payEmiDefaultDate, setPayEmiDefaultDate] = useState<string | undefined>(undefined);
   const [closeLoanModalTarget, setCloseLoanModalTarget] = useState<{
     loan: Loan;
     balance: number;
@@ -1249,8 +1251,9 @@ export default function App() {
                   member={members.find((m) => m.docId === viewingLoanLedger.memberDocId)}
                   onClose={() => setViewingLoanLedger(null)}
                   isAdmin={isAdmin}
-                  onPayEmiClick={(ln, targetMonth) => {
+                  onPayEmiClick={(ln, targetMonth, targetDate) => {
                     setPayEmiDefaultMonth(targetMonth);
+                    setPayEmiDefaultDate(targetDate);
                     setPayEmiModalLoan(ln);
                   }}
                 />
@@ -1309,12 +1312,7 @@ export default function App() {
                             )
                             .map((l, idx) => {
                               const mem = members.find((m) => m.docId === l.memberDocId);
-                              const loanEmis = emis.filter((e) => e.loanDocId === l.docId);
-                              const paidSum = loanEmis.reduce(
-                                (sum, e) => sum + (Number(e.amount) || 0),
-                                0
-                              );
-                              const balance = Math.max(0, l.totalPayable - paidSum);
+                              const balance = computeDayWiseLoanSchedule(l, emis).remainingPrincipal;
                               const isClosed = l.status === 'Closed' || balance === 0;
 
                               return (
@@ -1340,7 +1338,10 @@ export default function App() {
                                     ₹ {Number(l.principal || 0).toLocaleString('en-IN')}
                                   </td>
                                   <td className="py-3 px-3 font-mono-num text-slate-700">
-                                    {l.interestRate}% · {l.months} महिने
+                                    <div>{l.interestRate}% · {l.months} महिने</div>
+                                    <div className="text-[11px] text-indigo-600">
+                                      EMI तारीख: दरमहा {l.emiDay || 1}
+                                    </div>
                                   </td>
                                   <td className="py-3 px-3 text-right font-mono-num font-bold text-emerald-700">
                                     ₹ {Number(l.monthlyEmi || 0).toLocaleString('en-IN')}
@@ -1363,6 +1364,7 @@ export default function App() {
                                         <button
                                           onClick={() => {
                                             setPayEmiDefaultMonth(undefined);
+                                            setPayEmiDefaultDate(undefined);
                                             setPayEmiModalLoan(l);
                                           }}
                                           className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold cursor-pointer whitespace-nowrap"
@@ -1612,9 +1614,14 @@ export default function App() {
 
       <PayEmiModal
         isOpen={!!payEmiModalLoan}
-        onClose={() => setPayEmiModalLoan(null)}
+        onClose={() => {
+          setPayEmiModalLoan(null);
+          setPayEmiDefaultDate(undefined);
+        }}
         loan={payEmiModalLoan}
+        emis={emis}
         defaultMonth={payEmiDefaultMonth}
+        defaultDate={payEmiDefaultDate}
         onNotify={showToast}
       />
 

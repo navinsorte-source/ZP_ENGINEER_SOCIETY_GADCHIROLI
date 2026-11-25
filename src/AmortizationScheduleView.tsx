@@ -1,14 +1,14 @@
-import React from 'react';
-import { Printer, X, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Printer, X, CheckCircle2, AlertCircle, Clock, RotateCcw } from 'lucide-react';
 import { Loan, LoanEmi, Member } from './types';
-import { getNextMonthString, parseMonthYear } from './utils';
+import { computeDayWiseLoanSchedule } from './utils';
 
 interface AmortizationTableProps {
   loan: Loan;
   emis: LoanEmi[];
   member?: Member;
   onClose?: () => void;
-  onPayEmiClick?: (loan: Loan, targetMonth: string) => void;
+  onPayEmiClick?: (loan: Loan, targetMonth: string, targetDate?: string) => void;
   isAdmin?: boolean;
 }
 
@@ -20,67 +20,37 @@ export const AmortizationScheduleView: React.FC<AmortizationTableProps> = ({
   onPayEmiClick,
   isAdmin = false,
 }) => {
-  const loanEmis = emis
-    .filter((e) => e.loanDocId === loan.docId)
-    .sort((a, b) => parseMonthYear(a.month).getTime() - parseMonthYear(b.month).getTime());
+  // Manual date overrides per EMI row index (1-based) for live Day-Wise Interest preview & deposit
+  const [manualDatesByIndex, setManualDatesByIndex] = useState<Record<number, string>>({});
 
-  const totalPaidAmount = loanEmis.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
-  const currentBalance = Math.max(0, loan.totalPayable - totalPaidAmount);
-  const paidEmiCount = loanEmis.length;
+  const schedule = useMemo(
+    () => computeDayWiseLoanSchedule(loan, emis, manualDatesByIndex),
+    [loan, emis, manualDatesByIndex]
+  );
+
+  const {
+    rows: scheduleRows,
+    emiDay,
+    totalPaidAmount,
+    paidEmiCount,
+    missedCount,
+    remainingPrincipal,
+  } = schedule;
+
   const totalEmiMonths = Number(loan.months) || 12;
-
-  const startMonStr = loan.startMonth || 'January 2026';
-  const currentDate = new Date();
-  const monthlyEmiVal = Number(loan.monthlyEmi) || 0;
-  const annualRate = Number(loan.interestRate) || 8;
-  const monthlyRate = annualRate / 100 / 12;
-
-  let balance = Number(loan.principal) || 0;
-  let missedCount = 0;
-
-  const scheduleRows = [];
-  for (let i = 0; i < totalEmiMonths; i++) {
-    const targetMonthStr = getNextMonthString(startMonStr, i);
-    const matchedEmi = loanEmis.find(
-      (e) => e.month && e.month.toLowerCase().trim() === targetMonthStr.toLowerCase().trim()
-    );
-
-    const targetDateObj = parseMonthYear(targetMonthStr);
-    const isPastOrCurrentMonth =
-      targetDateObj <= new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-
-    const openingBalance = balance;
-    const interestComponent = Math.round(openingBalance * monthlyRate);
-    const principalComponent = Math.min(
-      openingBalance,
-      Math.max(0, monthlyEmiVal - interestComponent)
-    );
-    const closingBalance = Math.max(0, openingBalance - principalComponent);
-    balance = closingBalance;
-
-    let state: 'PAID' | 'PENDING' | 'UPCOMING' = 'UPCOMING';
-    if (matchedEmi) {
-      state = 'PAID';
-    } else if (isPastOrCurrentMonth && loan.status !== 'Closed') {
-      state = 'PENDING';
-      missedCount++;
-    }
-
-    scheduleRows.push({
-      index: i + 1,
-      month: targetMonthStr,
-      openingBalance,
-      emiAmount: matchedEmi ? Number(matchedEmi.amount) || monthlyEmiVal : monthlyEmiVal,
-      principalComponent,
-      interestComponent,
-      closingBalance,
-      state,
-      matchedEmi,
-    });
-  }
-
   const deduction10Percent = Math.round(loan.principal * 0.1);
   const netDisbursed = loan.principal - deduction10Percent;
+
+  const handleManualDateChange = (rowIndex: number, newDate: string) => {
+    setManualDatesByIndex((prev) => {
+      if (!newDate) {
+        const next = { ...prev };
+        delete next[rowIndex];
+        return next;
+      }
+      return { ...prev, [rowIndex]: newDate };
+    });
+  };
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
@@ -139,7 +109,7 @@ export const AmortizationScheduleView: React.FC<AmortizationTableProps> = ({
           <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200">
             <p className="text-xs font-medium text-amber-800">शिल्लक कर्ज (Remaining Balance)</p>
             <p className="text-lg font-bold text-amber-900 font-mono-num mt-1">
-              ₹ {currentBalance.toLocaleString('en-IN')}
+              ₹ {remainingPrincipal.toLocaleString('en-IN')}
             </p>
             <p className="text-xs text-amber-700 font-mono-num mt-0.5">
               मासिक EMI: ₹ {loan.monthlyEmi.toLocaleString('en-IN')}
@@ -164,7 +134,11 @@ export const AmortizationScheduleView: React.FC<AmortizationTableProps> = ({
           </span>
           <span aria-hidden="true">·</span>
           <span>
-            व्याजदर: <strong className="text-slate-900 font-mono-num">{loan.interestRate}% वार्षिक</strong>
+            EMI तारीख: <strong className="text-indigo-700 font-mono-num">दरमहा {emiDay} तारीख</strong>
+          </span>
+          <span aria-hidden="true">·</span>
+          <span>
+            व्याजदर: <strong className="text-slate-900 font-mono-num">{loan.interestRate}% वार्षिक (Day-Wise)</strong>
           </span>
           <span aria-hidden="true">·</span>
           <span>
@@ -197,15 +171,29 @@ export const AmortizationScheduleView: React.FC<AmortizationTableProps> = ({
 
         {/* Amortization Table */}
         <div>
-          <h4 className="text-sm font-bold text-slate-800 mb-3">
-            महिनानिहाय कर्ज परतफेड तक्ता (Amortization Schedule)
-          </h4>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h4 className="text-sm font-bold text-slate-800">
+              महिनानिहाय कर्ज परतफेड तक्ता (Day-Wise Amortization Schedule)
+            </h4>
+            {Object.keys(manualDatesByIndex).length > 0 && (
+              <button
+                type="button"
+                onClick={() => setManualDatesByIndex({})}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold cursor-pointer no-print"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>मूळ तारखा रीसेट करा</span>
+              </button>
+            )}
+          </div>
+
           <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-100 text-slate-700 border-b border-slate-200">
                   <th className="py-3 px-3 font-semibold">क्र.</th>
                   <th className="py-3 px-3 font-semibold">महिना (Month)</th>
+                  <th className="py-3 px-3 font-semibold">जमा दिनांक (Date)</th>
                   <th className="py-3 px-3 font-semibold text-right">सुरुवातीची शिल्लक (₹)</th>
                   <th className="py-3 px-3 font-semibold text-right">मासिक EMI (₹)</th>
                   <th className="py-3 px-3 font-semibold text-right">मुद्दल (Principal ₹)</th>
@@ -219,13 +207,69 @@ export const AmortizationScheduleView: React.FC<AmortizationTableProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {scheduleRows.map((row) => (
-                  <tr key={row.index} className="hover:bg-slate-50/80 transition-colors">
+                  <tr
+                    key={row.index}
+                    className={`transition-colors ${
+                      row.isCustomDate ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-slate-50/80'
+                    }`}
+                  >
                     <td className="py-2.5 px-3 font-mono-num text-slate-500">{row.index}</td>
                     <td className="py-2.5 px-3 font-semibold text-slate-900">
                       {row.month}
                       {row.matchedEmi && (
-                        <div className="text-[11px] font-normal text-slate-500 font-mono-num">
-                          दिनांक: {row.matchedEmi.date} · {row.matchedEmi.mode}
+                        <div className="text-[11px] font-normal text-slate-500">
+                          {row.matchedEmi.mode}
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      {row.state === 'PAID' && row.matchedEmi ? (
+                        <div>
+                          <div className="font-mono-num font-semibold text-slate-800">
+                            {row.matchedEmi.date}
+                          </div>
+                          <div className="text-[11px] font-mono-num text-emerald-700">
+                            {row.daysCount} दिवस
+                          </div>
+                        </div>
+                      ) : isAdmin && loan.status === 'Active' ? (
+                        <div className="space-y-0.5">
+                          <input
+                            type="date"
+                            value={row.effectiveDate}
+                            onChange={(e) => handleManualDateChange(row.index, e.target.value)}
+                            className={`rounded-lg border px-2 py-1 text-[11px] font-mono-num font-semibold focus:outline-none focus:ring-1 ${
+                              row.isCustomDate
+                                ? 'border-amber-400 bg-amber-50 text-amber-900 focus:ring-amber-500'
+                                : 'border-slate-300 bg-white text-slate-800 focus:border-indigo-500 focus:ring-indigo-500'
+                            }`}
+                          />
+                          <div className="flex items-center gap-1.5 text-[11px] font-mono-num">
+                            <span
+                              className={
+                                row.isCustomDate ? 'text-amber-700 font-bold' : 'text-slate-500'
+                              }
+                            >
+                              {row.daysCount} दिवस
+                            </span>
+                            {row.isCustomDate && (
+                              <button
+                                type="button"
+                                onClick={() => handleManualDateChange(row.index, '')}
+                                className="text-indigo-600 hover:underline font-sans text-[10px] cursor-pointer no-print"
+                                title="नियोजित तारखेवर परत या"
+                              >
+                                रीसेट
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="font-mono-num text-slate-700">{row.effectiveDate}</div>
+                          <div className="text-[11px] font-mono-num text-slate-500">
+                            {row.daysCount} दिवस
+                          </div>
                         </div>
                       )}
                     </td>
@@ -268,7 +312,7 @@ export const AmortizationScheduleView: React.FC<AmortizationTableProps> = ({
                       <td className="py-2.5 px-3 text-center no-print">
                         {row.state !== 'PAID' && onPayEmiClick ? (
                           <button
-                            onClick={() => onPayEmiClick(loan, row.month)}
+                            onClick={() => onPayEmiClick(loan, row.month, row.effectiveDate)}
                             className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold transition cursor-pointer whitespace-nowrap"
                           >
                             + हप्ता भरा

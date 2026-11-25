@@ -2,8 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { X, Calculator, Lock } from 'lucide-react';
 import { addDoc, collection, doc, updateDoc } from 'firebase/firestore';
 import { db, SOCIETY_OWNER_ID, handleFirestoreError, OperationType } from './firebase';
-import { Loan, Member, MonthlyContribution } from './types';
-import { compressImageFile, getCurrentMonthYearString, calculateAge } from './utils';
+import { Loan, LoanEmi, Member, MonthlyContribution } from './types';
+import {
+  compressImageFile,
+  getCurrentMonthYearString,
+  calculateAge,
+  computeDayWiseLoanSchedule,
+  diffDaysISO,
+} from './utils';
 
 interface LoanSanctionModalProps {
   isOpen: boolean;
@@ -25,6 +31,7 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
   const [interestRate, setInterestRate] = useState('8');
   const [months, setMonths] = useState('12');
   const [startMonth, setStartMonth] = useState(getCurrentMonthYearString());
+  const [emiDay, setEmiDay] = useState('1');
   const [guarantor, setGuarantor] = useState('');
   const [mortgage, setMortgage] = useState('पगार हमीपत्र व शेअर तारण');
   const [saving, setSaving] = useState(false);
@@ -35,6 +42,7 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
   const pVal = Math.max(0, Number(principal) || 0);
   const rVal = Math.max(0, Number(interestRate) || 8);
   const mVal = Math.max(1, Number(months) || 12);
+  const emiDayVal = Math.min(31, Math.max(1, Number(emiDay) || 1));
 
   const deduction10 = Math.round(pVal * 0.1);
   const netDisbursed = pVal - deduction10;
@@ -62,6 +70,7 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
         totalPayable,
         monthlyEmi,
         startMonth: startMonth.trim().slice(0, 48),
+        emiDay: emiDayVal,
         guarantor: (guarantor.trim() || '-').slice(0, 150),
         mortgage: (mortgage.trim() || '-').slice(0, 200),
         status: 'Active',
@@ -90,7 +99,7 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 मंजुरी दिनांक *
@@ -100,7 +109,7 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
                 required
                 value={loanDate}
                 onChange={(e) => setLoanDate(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2 text-sm"
+                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm"
               />
             </div>
             <div>
@@ -113,8 +122,25 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
                 value={startMonth}
                 onChange={(e) => setStartMonth(e.target.value)}
                 placeholder="January 2026"
-                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2 text-sm"
+                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm"
               />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                EMI तारीख (दरमहा) *
+              </label>
+              <select
+                required
+                value={emiDay}
+                onChange={(e) => setEmiDay(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-mono-num font-semibold"
+              >
+                {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={String(d)}>
+                    दरमहा {d} तारीख
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -248,7 +274,9 @@ interface PayEmiModalProps {
   isOpen: boolean;
   onClose: () => void;
   loan: Loan | null;
+  emis?: LoanEmi[];
   defaultMonth?: string;
+  defaultDate?: string;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
 }
 
@@ -256,7 +284,9 @@ export const PayEmiModal: React.FC<PayEmiModalProps> = ({
   isOpen,
   onClose,
   loan,
+  emis = [],
   defaultMonth,
+  defaultDate,
   onNotify,
 }) => {
   const todayStr = new Date().toISOString().split('T')[0];
@@ -272,15 +302,62 @@ export const PayEmiModal: React.FC<PayEmiModalProps> = ({
 
   useEffect(() => {
     if (loan && isOpen) {
-      setDate(todayStr);
+      setDate(defaultDate || todayStr);
       setMonth(defaultMonth || getCurrentMonthYearString());
       setAmount(String(loan.monthlyEmi || 0));
       setPhoto('');
       setChequeNo('');
     }
-  }, [loan, defaultMonth, isOpen]);
+  }, [loan, defaultMonth, defaultDate, isOpen]);
 
   if (!isOpen || !loan) return null;
+
+  // Compute live day-wise breakdown for this payment
+  const baseSchedule = computeDayWiseLoanSchedule(loan, emis);
+  const targetRow = baseSchedule.rows.find(
+    (r) => r.month.toLowerCase().trim() === month.toLowerCase().trim()
+  );
+  const enteredAmount = Math.max(0, Number(amount) || 0);
+
+  let dayWisePreview: {
+    daysCount: number;
+    interestAmount: number;
+    principalAmount: number;
+    closingBalance: number;
+  };
+
+  if (targetRow) {
+    const updatedSchedule = computeDayWiseLoanSchedule(
+      loan,
+      emis,
+      { [targetRow.index]: date },
+      { [targetRow.index]: enteredAmount }
+    );
+    const updatedRow = updatedSchedule.rows.find((r) => r.index === targetRow.index)!;
+    dayWisePreview = {
+      daysCount: updatedRow.daysCount,
+      interestAmount: updatedRow.interestComponent,
+      principalAmount: updatedRow.principalComponent,
+      closingBalance: updatedRow.closingBalance,
+    };
+  } else {
+    const paidRows = baseSchedule.rows.filter((r) => r.state === 'PAID');
+    const lastPaid = paidRows[paidRows.length - 1];
+    const prevRefDate = lastPaid?.effectiveDate || loan.loanDate;
+    const openingBal = baseSchedule.remainingPrincipal;
+    const daysCount = diffDaysISO(prevRefDate, date);
+    const interestAmount =
+      openingBal > 0
+        ? Math.round((openingBal * (Number(loan.interestRate) || 8) * daysCount) / (365 * 100))
+        : 0;
+    const principalAmount = Math.min(openingBal, Math.max(0, enteredAmount - interestAmount));
+    dayWisePreview = {
+      daysCount,
+      interestAmount,
+      principalAmount,
+      closingBalance: Math.max(0, openingBal - principalAmount),
+    };
+  }
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -308,7 +385,10 @@ export const PayEmiModal: React.FC<PayEmiModalProps> = ({
         month: month.trim().slice(0, 48),
         mode,
         chequeNo: (chequeNo.trim() || '').slice(0, 64),
-        amount: Math.max(0, Number(amount) || 0),
+        amount: enteredAmount,
+        daysCount: dayWisePreview.daysCount,
+        interestAmount: dayWisePreview.interestAmount,
+        principalAmount: dayWisePreview.principalAmount,
         photo: photo.slice(0, 800000),
         ownerId: SOCIETY_OWNER_ID,
       });
@@ -430,6 +510,34 @@ export const PayEmiModal: React.FC<PayEmiModalProps> = ({
               onChange={handlePhotoUpload}
               className="text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100"
             />
+          </div>
+
+          {/* Live Day-Wise Interest & Principal Breakdown */}
+          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-4 gap-2 text-center">
+            <div>
+              <p className="text-[10px] text-slate-500 font-medium">दिवस (Days)</p>
+              <p className="text-xs font-bold text-indigo-700 font-mono-num">
+                {dayWisePreview.daysCount} दिवस
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-amber-700 font-medium">व्याज (Interest)</p>
+              <p className="text-xs font-bold text-amber-800 font-mono-num">
+                ₹ {dayWisePreview.interestAmount.toLocaleString('en-IN')}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-emerald-700 font-medium">मुद्दल (Principal)</p>
+              <p className="text-xs font-bold text-emerald-800 font-mono-num">
+                ₹ {dayWisePreview.principalAmount.toLocaleString('en-IN')}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-500 font-medium">शिल्लक (Balance)</p>
+              <p className="text-xs font-bold text-slate-900 font-mono-num">
+                ₹ {dayWisePreview.closingBalance.toLocaleString('en-IN')}
+              </p>
+            </div>
           </div>
 
           <button

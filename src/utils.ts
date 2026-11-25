@@ -1,4 +1,4 @@
-import { Member, MonthlyContribution } from './types';
+import { Loan, LoanEmi, Member, MonthlyContribution } from './types';
 
 export function calculateAge(dobString: string): string {
   if (!dobString) return '-';
@@ -202,4 +202,159 @@ export function exportMembersToCSV(
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+export function buildDueDateString(monthYearStr: string, emiDay: number): string {
+  const base = parseMonthYear(monthYearStr);
+  const year = base.getFullYear();
+  const monthIdx = base.getMonth();
+  const maxDayInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  const clampedDay = Math.min(maxDayInMonth, Math.max(1, Math.floor(emiDay || 1)));
+  return `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`;
+}
+
+export function diffDaysISO(fromDateStr: string, toDateStr: string): number {
+  if (!fromDateStr || !toDateStr) return 0;
+  const parseUTC = (s: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s.trim());
+    if (!m) return NaN;
+    return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  };
+  const fromMs = parseUTC(fromDateStr);
+  const toMs = parseUTC(toDateStr);
+  if (isNaN(fromMs) || isNaN(toMs)) return 0;
+  return Math.max(0, Math.round((toMs - fromMs) / 86400000));
+}
+
+export interface DayWiseScheduleRow {
+  index: number;
+  month: string;
+  dueDate: string;
+  prevDate: string;
+  effectiveDate: string;
+  daysCount: number;
+  openingBalance: number;
+  emiAmount: number;
+  principalComponent: number;
+  interestComponent: number;
+  closingBalance: number;
+  state: 'PAID' | 'PENDING' | 'UPCOMING';
+  matchedEmi?: LoanEmi;
+  isCustomDate: boolean;
+}
+
+export interface DayWiseScheduleResult {
+  rows: DayWiseScheduleRow[];
+  emiDay: number;
+  totalPaidAmount: number;
+  paidEmiCount: number;
+  missedCount: number;
+  remainingPrincipal: number;
+  totalInterestAccrued: number;
+}
+
+export function computeDayWiseLoanSchedule(
+  loan: Loan,
+  emis: LoanEmi[],
+  manualDatesByIndex: Record<number, string> = {},
+  customAmountByIndex: Record<number, number> = {}
+): DayWiseScheduleResult {
+  const loanEmis = emis
+    .filter((e) => e.loanDocId === loan.docId)
+    .sort((a, b) => parseMonthYear(a.month).getTime() - parseMonthYear(b.month).getTime());
+
+  const totalPaidAmount = loanEmis.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const paidEmiCount = loanEmis.length;
+  const totalEmiMonths = Number(loan.months) || 12;
+
+  const startMonStr = loan.startMonth || 'January 2026';
+  const emiDay = Math.min(31, Math.max(1, Number(loan.emiDay) || 1));
+  const monthlyEmiVal = Number(loan.monthlyEmi) || 0;
+  const annualRate = Number(loan.interestRate) || 8;
+
+  const currentDate = new Date();
+  const currentMonthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+
+  let balance = Number(loan.principal) || 0;
+  let prevDate = loan.loanDate || buildDueDateString(startMonStr, emiDay);
+  let remainingPrincipalAfterPaid = balance;
+  let missedCount = 0;
+  let totalInterestAccrued = 0;
+
+  const rows: DayWiseScheduleRow[] = [];
+
+  for (let i = 0; i < totalEmiMonths; i++) {
+    const rowIndex = i + 1;
+    const targetMonthStr = getNextMonthString(startMonStr, i);
+    const matchedEmi = loanEmis.find(
+      (e) => e.month && e.month.toLowerCase().trim() === targetMonthStr.toLowerCase().trim()
+    );
+
+    const rawDueDate = buildDueDateString(targetMonthStr, emiDay);
+    const defaultUnpaidDate = rawDueDate < prevDate ? prevDate : rawDueDate;
+    const manualDate = manualDatesByIndex[rowIndex];
+    const effectiveDate = matchedEmi
+      ? matchedEmi.date || defaultUnpaidDate
+      : manualDate || defaultUnpaidDate;
+    const isCustomDate = !matchedEmi && !!manualDate && manualDate !== defaultUnpaidDate;
+
+    const daysCount = diffDaysISO(prevDate, effectiveDate);
+    const openingBalance = balance;
+    const emiAmount = matchedEmi
+      ? Number(matchedEmi.amount) || 0
+      : customAmountByIndex[rowIndex] !== undefined
+      ? customAmountByIndex[rowIndex]
+      : monthlyEmiVal;
+
+    const interestComponent =
+      openingBalance > 0
+        ? Math.round((openingBalance * annualRate * daysCount) / (365 * 100))
+        : 0;
+    const principalComponent = Math.min(
+      openingBalance,
+      Math.max(0, emiAmount - interestComponent)
+    );
+    const closingBalance = Math.max(0, openingBalance - principalComponent);
+
+    balance = closingBalance;
+    totalInterestAccrued += interestComponent;
+
+    let state: 'PAID' | 'PENDING' | 'UPCOMING' = 'UPCOMING';
+    if (matchedEmi) {
+      state = 'PAID';
+      remainingPrincipalAfterPaid = closingBalance;
+    } else if (parseMonthYear(targetMonthStr) <= currentMonthStart && loan.status !== 'Closed') {
+      state = 'PENDING';
+      missedCount++;
+    }
+
+    rows.push({
+      index: rowIndex,
+      month: targetMonthStr,
+      dueDate: defaultUnpaidDate,
+      prevDate,
+      effectiveDate,
+      daysCount,
+      openingBalance,
+      emiAmount,
+      principalComponent,
+      interestComponent,
+      closingBalance,
+      state,
+      matchedEmi,
+      isCustomDate,
+    });
+
+    prevDate = effectiveDate;
+  }
+
+  return {
+    rows,
+    emiDay,
+    totalPaidAmount,
+    paidEmiCount,
+    missedCount,
+    remainingPrincipal: loan.status === 'Closed' ? 0 : remainingPrincipalAfterPaid,
+    totalInterestAccrued,
+  };
 }

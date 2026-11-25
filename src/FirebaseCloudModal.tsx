@@ -258,6 +258,7 @@ export const FirebaseCloudModal: React.FC<FirebaseCloudModalProps> = ({
             totalPayable: Math.max(0, Number(l.totalPayable) || 0),
             monthlyEmi: Math.max(0, Number(l.monthlyEmi) || 0),
             startMonth: String(l.startMonth || 'January 2026').slice(0, 48),
+            emiDay: Math.min(31, Math.max(1, Number(l.emiDay) || 1)),
             guarantor: String(l.guarantor || '-').slice(0, 150),
             mortgage: String(l.mortgage || '-').slice(0, 200),
             status: l.status === 'Closed' ? 'Closed' : 'Active',

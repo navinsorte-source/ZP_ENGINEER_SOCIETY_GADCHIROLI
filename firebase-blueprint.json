@@ -59,6 +59,7 @@
         "totalPayable": { "type": "number" },
         "monthlyEmi": { "type": "number" },
         "startMonth": { "type": "string", "maxLength": 48 },
+        "emiDay": { "type": "number" },
         "guarantor": { "type": "string", "maxLength": 150 },
         "mortgage": { "type": "string", "maxLength": 200 },
         "status": { "type": "string", "enum": ["Active", "Closed"] },
@@ -80,6 +81,9 @@
         "mode": { "type": "string", "enum": ["Cash", "Cheque", "Bank Transfer", "Salary Deduction"] },
         "chequeNo": { "type": "string", "maxLength": 64 },
         "amount": { "type": "number" },
+        "daysCount": { "type": "number" },
+        "interestAmount": { "type": "number" },
+        "principalAmount": { "type": "number" },
         "photo": { "type": "string", "maxLength": 800000 },
         "ownerId": { "type": "string", "maxLength": 128 }
       },

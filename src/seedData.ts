@@ -155,6 +155,7 @@ export async function seedSampleSocietyData(): Promise<void> {
       totalPayable: 108000,
       monthlyEmi: 9000,
       startMonth: 'January 2026',
+      emiDay: 1,
       guarantor: 'अभियंता सचिन गेडाम (M002)',
       mortgage: 'पगार हमीपत्र व शेअर तारण',
       status: 'Active',

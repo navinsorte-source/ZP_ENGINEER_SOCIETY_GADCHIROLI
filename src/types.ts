@@ -46,6 +46,7 @@ export interface Loan {
   totalPayable: number;
   monthlyEmi: number;
   startMonth: string;
+  emiDay?: number;
   guarantor: string;
   mortgage: string;
   status: 'Active' | 'Closed';
@@ -63,6 +64,9 @@ export interface LoanEmi {
   mode: 'Cash' | 'Cheque' | 'Bank Transfer' | 'Salary Deduction';
   chequeNo?: string;
   amount: number;
+  daysCount?: number;
+  interestAmount?: number;
+  principalAmount?: number;
   photo?: string;
   ownerId: string;
 }
