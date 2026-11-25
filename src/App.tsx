@@ -14,7 +14,13 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import {
+  getRedirectResult,
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+} from 'firebase/auth';
 import {
   Users,
   Calendar,
@@ -188,8 +194,31 @@ export default function App() {
     }, 3500);
   };
 
-  // Firebase Auth listener for verified Admin session
+  // Firebase Auth listener & redirect completion for verified Admin session
   useEffect(() => {
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (!result?.user) return;
+        const email = (result.user.email || '').toLowerCase();
+        if (!result.user.emailVerified || email !== ADMIN_EMAIL.toLowerCase()) {
+          await signOut(auth);
+          showToast(
+            `केवळ अधिकृत अ‍ॅडमिन ईमेल (${ADMIN_EMAIL}) ला प्रवेश आहे!`,
+            'error'
+          );
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        const code = (err as { code?: string })?.code || '';
+        if (code === 'auth/unauthorized-domain') {
+          showToast(
+            `डोमेन (${window.location.hostname}) Firebase Authorized domains मध्ये जोडलेले नाही!`,
+            'error'
+          );
+        }
+      });
+
     const unsub = onAuthStateChanged(auth, (user) => {
       const validAdmin =
         !!user &&
@@ -205,7 +234,13 @@ export default function App() {
       }
       setAuthReady(true);
     });
-    return () => unsub();
+    return () => {
+      unsub();
+      if (snapshotTimerRef.current) {
+        clearTimeout(snapshotTimerRef.current);
+        snapshotTimerRef.current = null;
+      }
+    };
   }, []);
 
   // Real-time Firestore listeners ONLY attached when verified Admin is logged in (0 reads before login!)
@@ -564,7 +599,23 @@ export default function App() {
       showToast('स्वागत आहे! Executive Admin पॅनेल उघडले आहे.', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Google लॉगिन रद्द केले किंवा त्रुटी आली.', 'error');
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/unauthorized-domain') {
+        showToast(
+          `डोमेन (${window.location.hostname}) Firebase Authorized domains मध्ये जोडलेले नाही! कृपया Firebase Console मध्ये जोडा.`,
+          'error'
+        );
+      } else if (code === 'auth/popup-blocked') {
+        if (window.self === window.top) {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        }
+        showToast('ब्राउझरने Pop-up ब्लॉक केले आहे. कृपया Pop-up ला परवानगी द्या.', 'error');
+      } else if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        showToast('Google लॉगिन विंडो बंद केली गेली.', 'error');
+      } else {
+        showToast(`Google लॉगिन त्रुटी: ${code || 'कृपया पुन्हा प्रयत्न करा.'}`, 'error');
+      }
     } finally {
       setAdminSigningIn(false);
     }
@@ -627,6 +678,10 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    if (snapshotTimerRef.current) {
+      clearTimeout(snapshotTimerRef.current);
+      snapshotTimerRef.current = null;
+    }
     try {
       if (auth.currentUser) {
         await signOut(auth);

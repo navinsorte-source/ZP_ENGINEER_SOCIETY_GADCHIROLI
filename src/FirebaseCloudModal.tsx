@@ -141,6 +141,7 @@ export const FirebaseCloudModal: React.FC<FirebaseCloudModalProps> = ({
         }
       }
 
+      await new Promise((r) => setTimeout(r, 350));
       await onSyncAllSnapshots?.();
       onNotify(`एकूण ${count} रेकॉर्ड्स Google Firebase क्लाउडमध्ये यशस्वीरित्या सेव्ह झाले! 🎉`, 'success');
     } catch (err) {
@@ -319,6 +320,7 @@ export const FirebaseCloudModal: React.FC<FirebaseCloudModalProps> = ({
       }
 
       if (importedCount > 0) {
+        await new Promise((r) => setTimeout(r, 350));
         await onSyncAllSnapshots?.();
         onNotify(
           `जुन्या Firebase प्रोजेक्टमधून ${importedCount} रेकॉर्ड्स (सभासद, फोटो व वर्गणी) यशस्वीरित्या इम्पोर्ट झाले! 🎉`,

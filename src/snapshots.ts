@@ -45,7 +45,7 @@ function buildSafePassbookMember(member: Member): Omit<Member, 'loginPass' | 'aa
     joiningDate: String(member.joiningDate || '').slice(0, 32),
     mobile: String(member.mobile || '-').slice(0, 24),
     status: member.status === 'Inactive' ? 'Inactive' : 'Active',
-    photo: String(member.photo || '').slice(0, 450000),
+    photo: typeof member.photo === 'string' && member.photo.length <= 750000 ? member.photo : '',
     officeAddress: String(member.officeAddress || '-').slice(0, 250),
     homeAddress: String(member.homeAddress || '-').slice(0, 250),
     nominee: String(member.nominee || '-').slice(0, 120),
@@ -207,7 +207,7 @@ export async function syncDirectoryChunks(
       designation: String(m.designation || ''),
       societyPost: String(m.societyPost || ''),
       status: m.status === 'Inactive' ? 'Inactive' : 'Active',
-      photo: String(m.photo || '').slice(0, 450000),
+      photo: typeof m.photo === 'string' && m.photo.length <= 750000 ? m.photo : '',
     }));
 
   const safeCommittee: DirectoryCommitteeItem[] = [...committeeMembers]
@@ -217,7 +217,7 @@ export async function syncDirectoryChunks(
       name: String(cm.name || ''),
       societyPost: String(cm.societyPost || ''),
       officeDesignation: String(cm.officeDesignation || ''),
-      photo: String(cm.photo || '').slice(0, 450000),
+      photo: typeof cm.photo === 'string' && cm.photo.length <= 750000 ? cm.photo : '',
       displayOrder: Math.min(1000, Math.max(1, Number(cm.displayOrder) || 1)),
       memberDocId: String(cm.memberDocId || ''),
     }));
