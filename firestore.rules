@@ -20,6 +20,16 @@ service cloud.firestore {
       return resource.data;
     }
 
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'navin.sorte@gmail.com';
+    }
+
     function isSocietyScoped(data) {
       return data.ownerId is string && data.ownerId == 'zp-society-gadchiroli';
     }
@@ -27,7 +37,7 @@ service cloud.firestore {
     // 3. Entity Validation Blueprints
     function isValidMember(data) {
       return data.keys().hasAll(['id', 'name', 'designation', 'dob', 'joiningDate', 'status', 'share', 'ownerId'])
-        && data.keys().hasOnly(['id', 'name', 'designation', 'email', 'aadhaar', 'pan', 'loginUser', 'loginPass', 'dob', 'joiningDate', 'mobile', 'status', 'photo', 'officeAddress', 'homeAddress', 'nominee', 'nomineeRelation', 'share', 'ownerId'])
+        && data.keys().hasOnly(['id', 'name', 'designation', 'email', 'aadhaar', 'pan', 'loginUser', 'loginPass', 'dob', 'joiningDate', 'mobile', 'status', 'photo', 'officeAddress', 'homeAddress', 'nominee', 'nomineeRelation', 'share', 'societyPost', 'ownerId'])
         && data.id is string && data.id.size() >= 1 && data.id.size() <= 32
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
         && data.designation is string && data.designation.size() >= 1 && data.designation.size() <= 80
@@ -46,6 +56,7 @@ service cloud.firestore {
         && (!('nominee' in data) || (data.nominee is string && data.nominee.size() <= 120))
         && (!('nomineeRelation' in data) || (data.nomineeRelation is string && data.nomineeRelation.size() <= 64))
         && data.share is number && data.share >= 0
+        && (!('societyPost' in data) || (data.societyPost is string && data.societyPost.size() <= 80))
         && isSocietyScoped(data);
     }
 
@@ -115,74 +126,157 @@ service cloud.firestore {
         && isSocietyScoped(data);
     }
 
+    function isValidCommitteeMember(data) {
+      return data.keys().hasAll(['name', 'societyPost', 'displayOrder', 'ownerId'])
+        && data.keys().hasOnly(['name', 'societyPost', 'officeDesignation', 'mobile', 'photo', 'displayOrder', 'memberDocId', 'ownerId'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.societyPost is string && data.societyPost.size() >= 1 && data.societyPost.size() <= 80
+        && (!('officeDesignation' in data) || (data.officeDesignation is string && data.officeDesignation.size() <= 100))
+        && (!('mobile' in data) || (data.mobile is string && data.mobile.size() <= 24))
+        && (!('photo' in data) || (data.photo is string && data.photo.size() <= 800000))
+        && data.displayOrder is number && data.displayOrder >= 1 && data.displayOrder <= 1000
+        && (!('memberDocId' in data) || (data.memberDocId is string && data.memberDocId.size() <= 128))
+        && isSocietyScoped(data);
+    }
+
+    function isValidMemberPassbook(data) {
+      return data.keys().hasAll(['memberDocId', 'memberId', 'loginPass', 'member', 'contributions', 'loans', 'emis', 'updatedAt', 'ownerId'])
+        && data.keys().hasOnly(['memberDocId', 'memberId', 'loginPass', 'member', 'contributions', 'loans', 'emis', 'updatedAt', 'ownerId'])
+        && isValidId(data.memberDocId)
+        && data.memberId is string && data.memberId.size() >= 1 && data.memberId.size() <= 32
+        && data.loginPass is string && data.loginPass.size() <= 64
+        && data.member is map
+        && data.contributions is list && data.contributions.size() <= 500 && (data.contributions.size() == 0 || data.contributions[0] is map)
+        && data.loans is list && data.loans.size() <= 100 && (data.loans.size() == 0 || data.loans[0] is map)
+        && data.emis is list && data.emis.size() <= 1000 && (data.emis.size() == 0 || data.emis[0] is map)
+        && data.updatedAt is string && data.updatedAt.size() <= 48
+        && isSocietyScoped(data);
+    }
+
+    function isValidDirectoryChunk(data) {
+      return data.keys().hasAll(['chunkType', 'chunkIndex', 'items', 'updatedAt', 'ownerId'])
+        && data.keys().hasOnly(['chunkType', 'chunkIndex', 'items', 'updatedAt', 'ownerId'])
+        && data.chunkType in ['members', 'committee']
+        && data.chunkIndex is number && data.chunkIndex >= 0 && data.chunkIndex <= 200
+        && data.items is list && data.items.size() <= 35 && (data.items.size() == 0 || data.items[0] is map)
+        && data.updatedAt is string && data.updatedAt.size() <= 48
+        && isSocietyScoped(data);
+    }
+
     // 4. Collection Rules
     match /test/{docId} {
       allow get: if isValidId(docId);
     }
 
     match /members/{memberDocId} {
-      allow get: if isValidId(memberDocId) && isSocietyScoped(existing());
-      allow list: if isSocietyScoped(existing());
-      allow create: if isValidId(memberDocId) && isValidMember(incoming());
+      allow get: if isValidId(memberDocId) && isAdmin() && isSocietyScoped(existing());
+      allow list: if isAdmin() && isSocietyScoped(existing());
+      allow create: if isValidId(memberDocId) && isAdmin() && isValidMember(incoming());
       allow update: if isValidId(memberDocId)
+        && isAdmin()
         && isValidMember(incoming())
         && incoming().ownerId == existing().ownerId
-        && incoming().diff(existing()).affectedKeys().hasOnly(['id', 'name', 'designation', 'email', 'aadhaar', 'pan', 'loginUser', 'loginPass', 'dob', 'joiningDate', 'mobile', 'status', 'photo', 'officeAddress', 'homeAddress', 'nominee', 'nomineeRelation', 'share']);
-      allow delete: if isValidId(memberDocId) && isSocietyScoped(existing());
+        && incoming().diff(existing()).affectedKeys().hasOnly(['id', 'name', 'designation', 'email', 'aadhaar', 'pan', 'loginUser', 'loginPass', 'dob', 'joiningDate', 'mobile', 'status', 'photo', 'officeAddress', 'homeAddress', 'nominee', 'nomineeRelation', 'share', 'societyPost']);
+      allow delete: if isValidId(memberDocId) && isAdmin() && isSocietyScoped(existing());
     }
 
     match /monthly_contributions/{contribId} {
-      allow get: if isValidId(contribId) && isSocietyScoped(existing());
-      allow list: if isSocietyScoped(existing());
+      allow get: if isValidId(contribId) && isAdmin() && isSocietyScoped(existing());
+      allow list: if isAdmin() && isSocietyScoped(existing());
       allow create: if isValidId(contribId)
+        && isAdmin()
         && isValidMonthlyContribution(incoming())
         && exists(/databases/$(database)/documents/members/$(incoming().memberDocId));
       allow update: if isValidId(contribId)
+        && isAdmin()
         && isValidMonthlyContribution(incoming())
         && incoming().ownerId == existing().ownerId
         && incoming().memberDocId == existing().memberDocId
         && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'month', 'amount', 'note']);
-      allow delete: if isValidId(contribId) && isSocietyScoped(existing());
+      allow delete: if isValidId(contribId) && isAdmin() && isSocietyScoped(existing());
     }
 
     match /loans/{loanId} {
-      allow get: if isValidId(loanId) && isSocietyScoped(existing());
-      allow list: if isSocietyScoped(existing());
+      allow get: if isValidId(loanId) && isAdmin() && isSocietyScoped(existing());
+      allow list: if isAdmin() && isSocietyScoped(existing());
       allow create: if isValidId(loanId)
+        && isAdmin()
         && isValidLoan(incoming())
         && exists(/databases/$(database)/documents/members/$(incoming().memberDocId));
       allow update: if isValidId(loanId)
+        && isAdmin()
         && isValidLoan(incoming())
         && incoming().ownerId == existing().ownerId
         && incoming().memberDocId == existing().memberDocId
         && existing().status == 'Active'
         && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'closureDate', 'closureAmount', 'closureRemarks', 'guarantor', 'mortgage', 'emiDay']);
-      allow delete: if isValidId(loanId) && isSocietyScoped(existing());
+      allow delete: if isValidId(loanId) && isAdmin() && isSocietyScoped(existing());
     }
 
     match /loan_emis/{emiId} {
-      allow get: if isValidId(emiId) && isSocietyScoped(existing());
-      allow list: if isSocietyScoped(existing());
+      allow get: if isValidId(emiId) && isAdmin() && isSocietyScoped(existing());
+      allow list: if isAdmin() && isSocietyScoped(existing());
       allow create: if isValidId(emiId)
+        && isAdmin()
         && isValidLoanEmi(incoming())
         && exists(/databases/$(database)/documents/loans/$(incoming().loanDocId));
       allow update: if isValidId(emiId)
+        && isAdmin()
         && isValidLoanEmi(incoming())
         && incoming().ownerId == existing().ownerId
         && incoming().loanDocId == existing().loanDocId
         && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'month', 'mode', 'chequeNo', 'amount', 'daysCount', 'interestAmount', 'principalAmount', 'photo']);
-      allow delete: if isValidId(emiId) && isSocietyScoped(existing());
+      allow delete: if isValidId(emiId) && isAdmin() && isSocietyScoped(existing());
     }
 
     match /expenses/{expenseId} {
-      allow get: if isValidId(expenseId) && isSocietyScoped(existing());
-      allow list: if isSocietyScoped(existing());
-      allow create: if isValidId(expenseId) && isValidExpense(incoming());
+      allow get: if isValidId(expenseId) && isAdmin() && isSocietyScoped(existing());
+      allow list: if isAdmin() && isSocietyScoped(existing());
+      allow create: if isValidId(expenseId) && isAdmin() && isValidExpense(incoming());
       allow update: if isValidId(expenseId)
+        && isAdmin()
         && isValidExpense(incoming())
         && incoming().ownerId == existing().ownerId
         && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'category', 'description', 'amount', 'mode', 'photo']);
-      allow delete: if isValidId(expenseId) && isSocietyScoped(existing());
+      allow delete: if isValidId(expenseId) && isAdmin() && isSocietyScoped(existing());
+    }
+
+    match /committee_members/{committeeId} {
+      allow get: if isValidId(committeeId) && isAdmin() && isSocietyScoped(existing());
+      allow list: if isAdmin() && isSocietyScoped(existing());
+      allow create: if isValidId(committeeId) && isAdmin() && isValidCommitteeMember(incoming());
+      allow update: if isValidId(committeeId)
+        && isAdmin()
+        && isValidCommitteeMember(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'societyPost', 'officeDesignation', 'mobile', 'photo', 'displayOrder', 'memberDocId']);
+      allow delete: if isValidId(committeeId) && isAdmin() && isSocietyScoped(existing());
+    }
+
+    // Scoped 1-Read Member Passbook Snapshot (lookup by exact Member ID; no list for non-admins)
+    match /member_passbooks/{passbookId} {
+      allow get: if isValidId(passbookId) && (resource == null || isSocietyScoped(existing()));
+      allow list: if isAdmin() && isSocietyScoped(existing());
+      allow create: if isValidId(passbookId) && isAdmin() && isValidMemberPassbook(incoming());
+      allow update: if isValidId(passbookId)
+        && isAdmin()
+        && isValidMemberPassbook(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['memberDocId', 'memberId', 'loginPass', 'member', 'contributions', 'loans', 'emis', 'updatedAt']);
+      allow delete: if isValidId(passbookId) && isAdmin() && isSocietyScoped(existing());
+    }
+
+    // Chunked Public Photo Directory (safe public fields only; no PII)
+    match /directory_chunks/{chunkId} {
+      allow get: if isValidId(chunkId) && isSocietyScoped(existing());
+      allow list: if isSocietyScoped(existing());
+      allow create: if isValidId(chunkId) && isAdmin() && isValidDirectoryChunk(incoming());
+      allow update: if isValidId(chunkId)
+        && isAdmin()
+        && isValidDirectoryChunk(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['chunkType', 'chunkIndex', 'items', 'updatedAt']);
+      allow delete: if isValidId(chunkId) && isAdmin() && isSocietyScoped(existing());
     }
   }
 }

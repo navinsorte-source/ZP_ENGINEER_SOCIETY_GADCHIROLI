@@ -25,6 +25,7 @@ interface FirebaseCloudModalProps {
   emis: LoanEmi[];
   expenses: Expense[];
   onSeedSampleData: () => Promise<void>;
+  onSyncAllSnapshots?: () => Promise<{ passbooks: number; chunks: number }>;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
 }
 
@@ -37,10 +38,12 @@ export const FirebaseCloudModal: React.FC<FirebaseCloudModalProps> = ({
   emis,
   expenses,
   onSeedSampleData,
+  onSyncAllSnapshots,
   onNotify,
 }) => {
   const [importingOldDb, setImportingOldDb] = useState(false);
   const [restoringJson, setRestoringJson] = useState(false);
+  const [syncingSnapshots, setSyncingSnapshots] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   if (!isOpen) return null;
@@ -138,6 +141,7 @@ export const FirebaseCloudModal: React.FC<FirebaseCloudModalProps> = ({
         }
       }
 
+      await onSyncAllSnapshots?.();
       onNotify(`एकूण ${count} रेकॉर्ड्स Google Firebase क्लाउडमध्ये यशस्वीरित्या सेव्ह झाले! 🎉`, 'success');
     } catch (err) {
       console.error(err);
@@ -315,6 +319,7 @@ export const FirebaseCloudModal: React.FC<FirebaseCloudModalProps> = ({
       }
 
       if (importedCount > 0) {
+        await onSyncAllSnapshots?.();
         onNotify(
           `जुन्या Firebase प्रोजेक्टमधून ${importedCount} रेकॉर्ड्स (सभासद, फोटो व वर्गणी) यशस्वीरित्या इम्पोर्ट झाले! 🎉`,
           'success'
@@ -522,16 +527,43 @@ export const FirebaseCloudModal: React.FC<FirebaseCloudModalProps> = ({
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={async () => {
-                  await onSeedSampleData();
-                }}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 text-xs font-bold cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4 text-amber-600" />
-                <span>नमुना डेटा जोडा (Sample Data)</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2.5">
+                {onSyncAllSnapshots && (
+                  <button
+                    type="button"
+                    disabled={syncingSnapshots}
+                    onClick={async () => {
+                      setSyncingSnapshots(true);
+                      try {
+                        const res = await onSyncAllSnapshots();
+                        onNotify(
+                          `${res.passbooks} सभासद पासबुक व ${res.chunks} फोटो डिरेक्टरी Snapshots सिंक झाले! ✅`,
+                          'success'
+                        );
+                      } catch {
+                        onNotify('Snapshots सिंक करताना त्रुटी आली.', 'error');
+                      } finally {
+                        setSyncingSnapshots(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-teal-50 border border-teal-300 text-teal-800 hover:bg-teal-100 disabled:opacity-60 text-xs font-bold cursor-pointer"
+                  >
+                    <RefreshCw className={`w-4 h-4 text-teal-600 ${syncingSnapshots ? 'animate-spin' : ''}`} />
+                    <span>{syncingSnapshots ? 'सिंक होत आहे...' : 'सर्व Snapshots सिंक करा'}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onSeedSampleData();
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 text-xs font-bold cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-600" />
+                  <span>नमुना डेटा जोडा (Sample Data)</span>
+                </button>
+              </div>
             </div>
           </div>
 

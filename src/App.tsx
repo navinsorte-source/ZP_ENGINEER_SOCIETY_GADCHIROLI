@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   query,
   where,
 } from 'firebase/firestore';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   Users,
   Calendar,
@@ -23,7 +26,6 @@ import {
   Download,
   Gift,
   MessageCircle,
-  Edit3,
   Trash2,
   Eye,
   Lock,
@@ -34,9 +36,29 @@ import {
   Shield,
   Menu,
   X,
+  Printer,
+  Award,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
-import { db, SOCIETY_OWNER_ID, handleFirestoreError, OperationType } from './firebase';
-import { Expense, Loan, LoanEmi, Member, MonthlyContribution } from './types';
+import {
+  ADMIN_EMAIL,
+  auth,
+  db,
+  googleProvider,
+  SOCIETY_OWNER_ID,
+  handleFirestoreError,
+  OperationType,
+} from './firebase';
+import {
+  CommitteeMember,
+  Expense,
+  Loan,
+  LoanEmi,
+  Member,
+  MemberPassbook,
+  MonthlyContribution,
+} from './types';
 import {
   buildWhatsAppBirthdayUrl,
   calculateAge,
@@ -46,6 +68,7 @@ import {
   isTodayBirthday,
   parseMonthYear,
 } from './utils';
+import { downloadLoanSchedulePdf } from './loanSchedulePdf';
 import { PWAInstallButton, OfflineIndicator } from './PWAInstallButton';
 import { MemberFormModal, MonthlyContributionModal } from './SocietyModals';
 import {
@@ -58,31 +81,56 @@ import { AmortizationScheduleView } from './AmortizationScheduleView';
 import { MemberPortalView } from './MemberPortalView';
 import { MemberDetailModal, DEFAULT_AVATAR_URL } from './MemberDetailModal';
 import { FirebaseCloudModal } from './FirebaseCloudModal';
+import { SocietyDirectoryTab } from './SocietyDirectoryTab';
 import { seedSampleSocietyData } from './seedData';
+import {
+  deleteMemberPassbook,
+  loadDirectoryChunks,
+  normalizePassbookId,
+  syncAllSnapshots,
+  syncDirectoryChunks,
+  syncSingleMemberPassbook,
+} from './snapshots';
 
-type ActiveTab = 'members' | 'monthly' | 'loans' | 'expenses' | 'memberPortal';
+type ActiveTab = 'members' | 'monthly' | 'loans' | 'expenses' | 'directory' | 'memberPortal';
+const PAGE_SIZE = 50;
 
 export default function App() {
-  // Real-time Firestore state
+  // Real-time Firestore state (loaded ONLY for authenticated Admin)
   const [members, setMembers] = useState<Member[]>([]);
+  const [committeeMembers, setCommitteeMembers] = useState<CommitteeMember[]>([]);
   const [contributions, setContributions] = useState<MonthlyContribution[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [emis, setEmis] = useState<LoanEmi[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  // Scoped Member Passbook & Lazy Directory state (loaded ONLY for logged-in Member)
+  const [memberPassbookMember, setMemberPassbookMember] = useState<Member | null>(null);
+  const [directoryMembers, setDirectoryMembers] = useState<Member[]>([]);
+  const [directoryCommittee, setDirectoryCommittee] = useState<CommitteeMember[]>([]);
+  const [directoryLoaded, setDirectoryLoaded] = useState(false);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
 
   // Auth / Session state
+  const [authReady, setAuthReady] = useState(false);
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [loginRole, setLoginRole] = useState<'admin' | 'member'>('admin');
+  const [loginRole, setLoginRole] = useState<'admin' | 'member'>('member');
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [adminSigningIn, setAdminSigningIn] = useState(false);
+  const [memberLoggingIn, setMemberLoggingIn] = useState(false);
   const [loggedInMemberId, setLoggedInMemberId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('members');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Filters
+  // Filters & Pagination
   const [searchQuery, setSearchQuery] = useState('');
   const [designationFilter, setDesignationFilter] = useState('');
+  const [membersPage, setMembersPage] = useState(1);
+  const [monthlyMonthFilter, setMonthlyMonthFilter] = useState('');
+  const [monthlyPage, setMonthlyPage] = useState(1);
 
   // Modals state
   const [memberModalOpen, setMemberModalOpen] = useState(false);
@@ -103,6 +151,7 @@ export default function App() {
     balance: number;
   } | null>(null);
   const [viewingLoanLedger, setViewingLoanLedger] = useState<Loan | null>(null);
+  const [downloadingLoanPdfId, setDownloadingLoanPdfId] = useState<string | null>(null);
   const [viewingVoucherPhoto, setViewingVoucherPhoto] = useState<string | null>(null);
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
 
@@ -114,6 +163,24 @@ export default function App() {
   } | null>(null);
   const [seeding, setSeeding] = useState(false);
 
+  // Refs for debounced snapshot syncing
+  const latestDataRef = useRef({
+    members,
+    contributions,
+    loans,
+    emis,
+    committeeMembers,
+  });
+  latestDataRef.current = {
+    members,
+    contributions,
+    loans,
+    emis,
+    committeeMembers,
+  };
+  const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialSnapshotCheckedRef = useRef(false);
+
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
     setTimeout(() => {
@@ -121,8 +188,35 @@ export default function App() {
     }, 3500);
   };
 
-  // Real-time listeners scoped by SOCIETY_OWNER_ID
+  // Firebase Auth listener for verified Admin session
   useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      const validAdmin =
+        !!user &&
+        !!user.emailVerified &&
+        (user.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+      setIsAdminVerified(validAdmin);
+      if (validAdmin) {
+        setLoggedInMemberId(null);
+        setMemberPassbookMember(null);
+        setIsLoggedIn(true);
+        setActiveTab((prev) => (prev === 'memberPortal' ? 'members' : prev));
+      }
+      setAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // Real-time Firestore listeners ONLY attached when verified Admin is logged in (0 reads before login!)
+  useEffect(() => {
+    if (!isLoggedIn || loggedInMemberId || !isAdminVerified) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+
     const qMembers = query(
       collection(db, 'members'),
       where('ownerId', '==', SOCIETY_OWNER_ID)
@@ -200,14 +294,158 @@ export default function App() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'expenses')
     );
 
+    const qCommittee = query(
+      collection(db, 'committee_members'),
+      where('ownerId', '==', SOCIETY_OWNER_ID)
+    );
+    const unsubCommittee = onSnapshot(
+      qCommittee,
+      (snap) => {
+        const list: CommitteeMember[] = [];
+        snap.forEach((d) =>
+          list.push({ docId: d.id, ...(d.data() as Omit<CommitteeMember, 'docId'>) })
+        );
+        setCommitteeMembers(list);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'committee_members')
+    );
+
     return () => {
       unsubMembers();
       unsubMonthly();
       unsubLoans();
       unsubEmis();
       unsubExpenses();
+      unsubCommittee();
     };
+  }, [isLoggedIn, loggedInMemberId, isAdminVerified]);
+
+  const handleSyncAllSnapshots = useCallback(async () => {
+    const {
+      members: curMembers,
+      contributions: curContribs,
+      loans: curLoans,
+      emis: curEmis,
+      committeeMembers: curCommittee,
+    } = latestDataRef.current;
+    return await syncAllSnapshots(
+      curMembers,
+      curContribs,
+      curLoans,
+      curEmis,
+      curCommittee
+    );
   }, []);
+
+  const scheduleSnapshotSync = useCallback(
+    (memberDocId?: string, scope: 'member' | 'directory' | 'all' = 'member') => {
+      if (snapshotTimerRef.current) {
+        clearTimeout(snapshotTimerRef.current);
+      }
+      snapshotTimerRef.current = setTimeout(async () => {
+        const {
+          members: curMembers,
+          contributions: curContribs,
+          loans: curLoans,
+          emis: curEmis,
+          committeeMembers: curCommittee,
+        } = latestDataRef.current;
+
+        try {
+          if ((scope === 'member' || scope === 'all') && memberDocId) {
+            const target = curMembers.find((m) => m.docId === memberDocId);
+            if (target) {
+              await syncSingleMemberPassbook(target, curContribs, curLoans, curEmis);
+            }
+          }
+          if (scope === 'directory' || scope === 'all') {
+            await syncDirectoryChunks(curMembers, curCommittee);
+          }
+        } catch (err) {
+          console.error('Snapshot sync error:', err);
+        }
+      }, 750);
+    },
+    []
+  );
+
+  // Auto-initialize snapshots once when Admin logs in if directory_chunks is empty
+  useEffect(() => {
+    if (
+      !isLoggedIn ||
+      loggedInMemberId ||
+      !isAdminVerified ||
+      loading ||
+      initialSnapshotCheckedRef.current
+    ) {
+      return;
+    }
+    if (members.length === 0 && committeeMembers.length === 0) {
+      return;
+    }
+
+    initialSnapshotCheckedRef.current = true;
+    const timer = setTimeout(async () => {
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'directory_chunks'), where('ownerId', '==', SOCIETY_OWNER_ID))
+        );
+        if (snap.empty) {
+          await handleSyncAllSnapshots();
+        }
+      } catch (err) {
+        console.error('Initial snapshot check skipped:', err);
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [
+    isLoggedIn,
+    loggedInMemberId,
+    isAdminVerified,
+    loading,
+    members.length,
+    committeeMembers.length,
+    handleSyncAllSnapshots,
+  ]);
+
+  // Lazy-load chunked public directory ONLY when a Member opens the Directory tab
+  useEffect(() => {
+    if (!isLoggedIn || !loggedInMemberId || activeTab !== 'directory' || directoryLoaded) {
+      return;
+    }
+    let cancelled = false;
+    setDirectoryLoading(true);
+    loadDirectoryChunks()
+      .then(({ directoryMembers: dm, directoryCommittee: dc }) => {
+        if (cancelled) return;
+        setDirectoryMembers(dm);
+        setDirectoryCommittee(dc);
+        setDirectoryLoaded(true);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) {
+          showToast('कार्यकारिणी यादी लोड करताना अडचण आली.', 'error');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDirectoryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, loggedInMemberId, activeTab, directoryLoaded]);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setMembersPage(1);
+  }, [searchQuery, designationFilter]);
+
+  useEffect(() => {
+    setMonthlyPage(1);
+  }, [monthlyMonthFilter]);
 
   // Computed Summaries
   const activeMembersCount = useMemo(
@@ -270,55 +508,146 @@ export default function App() {
     });
   }, [members, searchQuery, designationFilter, loggedInMemberId]);
 
+  const totalMembersPages = Math.max(1, Math.ceil(filteredMembers.length / PAGE_SIZE));
+  const paginatedMembers = useMemo(() => {
+    const start = (membersPage - 1) * PAGE_SIZE;
+    return filteredMembers.slice(start, start + PAGE_SIZE);
+  }, [filteredMembers, membersPage]);
+
+  const availableContributionMonths = useMemo(() => {
+    const set = new Set<string>();
+    contributions.forEach((c) => {
+      if (c.month) set.add(c.month.toUpperCase());
+    });
+    return Array.from(set).sort(
+      (a, b) => parseMonthYear(b).getTime() - parseMonthYear(a).getTime()
+    );
+  }, [contributions]);
+
+  const filteredContributions = useMemo(() => {
+    if (!monthlyMonthFilter) return contributions;
+    return contributions.filter(
+      (c) => (c.month || '').toUpperCase() === monthlyMonthFilter.toUpperCase()
+    );
+  }, [contributions, monthlyMonthFilter]);
+
+  const totalMonthlyPages = Math.max(1, Math.ceil(filteredContributions.length / PAGE_SIZE));
+  const paginatedContributions = useMemo(() => {
+    const start = (monthlyPage - 1) * PAGE_SIZE;
+    return filteredContributions.slice(start, start + PAGE_SIZE);
+  }, [filteredContributions, monthlyPage]);
+
   const loggedInMemberObj = useMemo(
-    () => members.find((m) => m.docId === loggedInMemberId) || null,
-    [members, loggedInMemberId]
+    () => memberPassbookMember || members.find((m) => m.docId === loggedInMemberId) || null,
+    [memberPassbookMember, members, loggedInMemberId]
   );
 
   // Handlers
-  const handleLogin = (e: React.FormEvent) => {
+  const handleAdminGoogleLogin = async () => {
+    setAdminSigningIn(true);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const email = (result.user.email || '').toLowerCase();
+      if (!result.user.emailVerified || email !== ADMIN_EMAIL.toLowerCase()) {
+        await signOut(auth);
+        showToast(
+          `केवळ अधिकृत अ‍ॅडमिन ईमेल (${ADMIN_EMAIL}) ला प्रवेश आहे!`,
+          'error'
+        );
+        return;
+      }
+      setLoggedInMemberId(null);
+      setMemberPassbookMember(null);
+      setIsAdminVerified(true);
+      setIsLoggedIn(true);
+      setActiveTab('members');
+      showToast('स्वागत आहे! Executive Admin पॅनेल उघडले आहे.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Google लॉगिन रद्द केले किंवा त्रुटी आली.', 'error');
+    } finally {
+      setAdminSigningIn(false);
+    }
+  };
+
+  const handleMemberLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const u = usernameInput.trim();
     const p = passwordInput.trim();
 
-    if (loginRole === 'admin') {
-      if (u === 'admin' && p === 'admin123') {
-        setLoggedInMemberId(null);
-        setIsLoggedIn(true);
-        setActiveTab('members');
-        showToast('स्वागत आहे! Executive Admin पॅनेल उघडले आहे.', 'success');
-      } else {
-        showToast('चुकीचा युजरनेम किंवा पासवर्ड! (Admin: admin / admin123)', 'error');
-      }
-    } else {
-      if (!u) {
-        showToast('कृपया आपला सभासद आयडी किंवा मोबाईल नंबर टाका!', 'error');
+    const memberIdKey = normalizePassbookId(u);
+    if (!memberIdKey) {
+      showToast('कृपया आपला वैध सभासद आयडी टाका (उदा. M001)!', 'error');
+      return;
+    }
+
+    setMemberLoggingIn(true);
+    try {
+      // ONLY 1 Firestore Read for complete member profile + contributions + loans + EMIs!
+      const passbookSnap = await getDoc(doc(db, 'member_passbooks', memberIdKey));
+      if (!passbookSnap.exists()) {
+        showToast(
+          'हा सभासद आयडी सापडला नाही! कृपया अचूक आयडी टाका (किंवा Admin कडून Snapshot सिंक करून घ्या).',
+          'error'
+        );
         return;
       }
-      const found = members.find(
-        (m) =>
-          m.id.toLowerCase() === u.toLowerCase() ||
-          (m.loginUser && m.loginUser.toLowerCase() === u.toLowerCase()) ||
-          (m.mobile && m.mobile === u)
-      );
-      if (!found) {
-        showToast('हा सभासद आयडी सापडला नाही! कृपया अचूक आयडी टाका (उदा. M001).', 'error');
-        return;
-      }
-      if (found.loginPass && found.loginPass !== p && p !== '') {
+
+      const data = passbookSnap.data() as Omit<MemberPassbook, 'docId'>;
+      const storedPass = (data.loginPass || '123456').trim();
+      if (!p || storedPass !== p) {
         showToast('चुकीचा पासवर्ड! कृपया योग्य पासवर्ड टाका.', 'error');
         return;
       }
-      setLoggedInMemberId(found.docId);
+
+      const fullMemberObj: Member = {
+        ...data.member,
+        docId: data.memberDocId,
+        aadhaar: '-',
+        loginPass: storedPass,
+      };
+
+      setMemberPassbookMember(fullMemberObj);
+      setContributions(data.contributions || []);
+      setLoans(data.loans || []);
+      setEmis(data.emis || []);
+      setDirectoryLoaded(false);
+      setDirectoryMembers([]);
+      setDirectoryCommittee([]);
+      setLoggedInMemberId(data.memberDocId);
       setIsLoggedIn(true);
       setActiveTab('memberPortal');
-      showToast(`स्वागत आहे, ${found.name}!`, 'success');
+      showToast(`स्वागत आहे, ${fullMemberObj.name}!`, 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('लॉगिन तपासताना तांत्रिक अडचण आली.', 'error');
+    } finally {
+      setMemberLoggingIn(false);
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      if (auth.currentUser) {
+        await signOut(auth);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    initialSnapshotCheckedRef.current = false;
+    setIsAdminVerified(false);
     setIsLoggedIn(false);
     setLoggedInMemberId(null);
+    setMemberPassbookMember(null);
+    setMembers([]);
+    setCommitteeMembers([]);
+    setContributions([]);
+    setLoans([]);
+    setEmis([]);
+    setExpenses([]);
+    setDirectoryMembers([]);
+    setDirectoryCommittee([]);
+    setDirectoryLoaded(false);
     setUsernameInput('');
     setPasswordInput('');
   };
@@ -327,6 +656,9 @@ export default function App() {
     setSeeding(true);
     try {
       await seedSampleSocietyData();
+      setTimeout(() => {
+        handleSyncAllSnapshots().catch(console.error);
+      }, 1200);
       showToast('नमुना सभासद, वर्गणी व कर्ज डेटा यशस्वीरित्या लोड झाला! 🎉', 'success');
     } catch {
       showToast('डेटा लोड करताना त्रुटी आली.', 'error');
@@ -368,27 +700,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
                 <button
                   type="button"
-                  onClick={() => {
-                    setLoginRole('admin');
-                    setUsernameInput('admin');
-                    setPasswordInput('admin123');
-                  }}
-                  className={`py-2.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                    loginRole === 'admin'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Shield className="w-4 h-4" />
-                  <span>अ‍ॅडमिन (Admin)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginRole('member');
-                    setUsernameInput('M001');
-                    setPasswordInput('123456');
-                  }}
+                  onClick={() => setLoginRole('member')}
                   className={`py-2.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                     loginRole === 'member'
                       ? 'bg-teal-600 text-white shadow-xs'
@@ -398,93 +710,86 @@ export default function App() {
                   <User className="w-4 h-4" />
                   <span>सभासद (Member)</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setLoginRole('admin')}
+                  className={`py-2.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    loginRole === 'admin'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Shield className="w-4 h-4" />
+                  <span>अ‍ॅडमिन (Admin)</span>
+                </button>
               </div>
             </div>
 
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  {loginRole === 'admin'
-                    ? 'युजरनेम (Username)'
-                    : 'सभासद आयडी किंवा मोबाईल (Member ID)'}
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={usernameInput}
-                  onChange={(e) => setUsernameInput(e.target.value)}
-                  placeholder={loginRole === 'admin' ? 'admin' : 'उदा. M001'}
-                  className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm font-medium focus:bg-white focus:border-blue-600 focus:outline-none"
-                />
-              </div>
+            {loginRole === 'admin' ? (
+              <div className="space-y-4 py-2">
+                <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200 text-xs text-blue-900 space-y-1.5">
+                  <p className="font-bold">🔐 सुरक्षित Google Admin लॉगिन</p>
+                  <p className="text-blue-800/90 leading-relaxed">
+                    अधिकृत संस्थेच्या अ‍ॅडमिन खात्याने (<span className="font-mono-num font-bold">{ADMIN_EMAIL}</span>) Google Sign-In करून संपूर्ण डॅशबोर्ड उघडा.
+                  </p>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  पासवर्ड (Password)
-                </label>
-                <input
-                  type="password"
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm font-medium focus:bg-white focus:border-blue-600 focus:outline-none"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-teal-600 hover:from-blue-700 hover:to-teal-700 py-3.5 text-sm font-bold text-white shadow-md transition cursor-pointer"
-              >
-                लॉगिन करा (Login to Portal)
-              </button>
-            </form>
-
-            {/* Quick Demo Fill Helpers */}
-            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-              <span>
-                डेमो लॉगिन:{' '}
                 <button
                   type="button"
-                  onClick={() => {
-                    setLoginRole('admin');
-                    setUsernameInput('admin');
-                    setPasswordInput('admin123');
-                  }}
-                  className="text-blue-600 font-semibold hover:underline cursor-pointer"
+                  disabled={!authReady || adminSigningIn}
+                  onClick={handleAdminGoogleLogin}
+                  className="w-full flex items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 disabled:opacity-60 py-3.5 text-sm font-bold text-white shadow-md transition cursor-pointer"
                 >
-                  Admin (admin/admin123)
-                </button>{' '}
-                ·{' '}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginRole('member');
-                    setUsernameInput('M001');
-                    setPasswordInput('123456');
-                  }}
-                  className="text-teal-600 font-semibold hover:underline cursor-pointer"
-                >
-                  सभासद (M001)
+                  <Shield className="w-4 h-4" />
+                  <span>
+                    {adminSigningIn ? 'Google लॉगिन सुरू आहे...' : 'Google ने Admin लॉगिन करा'}
+                  </span>
                 </button>
-              </span>
+              </div>
+            ) : (
+              <form onSubmit={handleMemberLogin} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    सभासद आयडी (Member ID)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={usernameInput}
+                    onChange={(e) => setUsernameInput(e.target.value)}
+                    placeholder="उदा. M001"
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm font-medium uppercase focus:bg-white focus:border-blue-600 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    पासवर्ड (Password)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm font-medium focus:bg-white focus:border-blue-600 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={memberLoggingIn}
+                  className="w-full rounded-xl bg-gradient-to-r from-teal-600 via-emerald-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 disabled:opacity-60 py-3.5 text-sm font-bold text-white shadow-md transition cursor-pointer"
+                >
+                  {memberLoggingIn ? 'तपासत आहे...' : 'लॉगिन करा (Login to Portal)'}
+                </button>
+              </form>
+            )}
+
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+              <span>१-रीड फास्ट पासबुक सुरक्षा सक्रिय</span>
               <PWAInstallButton />
             </div>
-
-            {members.length === 0 && !loading && (
-              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-3">
-                <p className="text-xs text-amber-800 font-medium">
-                  डेटाबेस रिकामा आहे. सुरुवातीचे नमुना सभासद लोड करायचे का?
-                </p>
-                <button
-                  type="button"
-                  disabled={seeding}
-                  onClick={handleSeedData}
-                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 cursor-pointer"
-                >
-                  {seeding ? 'लोड होत आहे...' : 'नमुना डेटा लोड करा'}
-                </button>
-              </div>
-            )}
           </div>
         </div>
 
@@ -507,7 +812,7 @@ export default function App() {
     );
   }
 
-  const isAdmin = !loggedInMemberId;
+  const isAdmin = !loggedInMemberId && isAdminVerified;
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row">
@@ -582,6 +887,20 @@ export default function App() {
                 <span>४. खर्च व जमा (Vouchers)</span>
               </button>
             )}
+
+            <button
+              onClick={() => setActiveTab('directory')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition cursor-pointer ${
+                activeTab === 'directory'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md'
+                  : 'text-blue-100/80 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Award className="w-4 h-4 shrink-0" />
+              <span>
+                {isAdmin ? '५. कार्यकारिणी व सभासद' : 'कार्यकारिणी व सभासद यादी'}
+              </span>
+            </button>
 
             {!isAdmin && (
               <button
@@ -668,6 +987,12 @@ export default function App() {
                 >
                   खर्च
                 </button>
+                <button
+                  onClick={() => setActiveTab('directory')}
+                  className={activeTab === 'directory' ? 'text-amber-600 font-bold' : ''}
+                >
+                  कार्यकारिणी
+                </button>
               </>
             ) : (
               <>
@@ -682,6 +1007,12 @@ export default function App() {
                   className={activeTab === 'loans' ? 'text-indigo-600 font-bold' : ''}
                 >
                   कर्ज लेजर
+                </button>
+                <button
+                  onClick={() => setActiveTab('directory')}
+                  className={activeTab === 'directory' ? 'text-amber-600 font-bold' : ''}
+                >
+                  कार्यकारिणी
                 </button>
               </>
             )}
@@ -755,6 +1086,15 @@ export default function App() {
                 ४. खर्च व जमा (Vouchers)
               </button>
             )}
+            <button
+              onClick={() => {
+                setActiveTab('directory');
+                setMobileMenuOpen(false);
+              }}
+              className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-white/10"
+            >
+              {isAdmin ? '५. कार्यकारिणी व सभासद' : 'कार्यकारिणी व सभासद यादी'}
+            </button>
             {!isAdmin && (
               <button
                 onClick={() => {
@@ -966,7 +1306,8 @@ export default function App() {
                           </td>
                         </tr>
                       ) : (
-                        filteredMembers.map((m, idx) => {
+                        paginatedMembers.map((m, idx) => {
+                          const globalIdx = (membersPage - 1) * PAGE_SIZE + idx + 1;
                           const memContrib = contributions
                             .filter((c) => c.memberDocId === m.docId)
                             .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
@@ -980,7 +1321,7 @@ export default function App() {
                               className="hover:bg-blue-50/50 transition-colors group"
                             >
                               <td className="py-3.5 px-2.5 font-mono-num font-bold text-slate-500">
-                                {idx + 1}
+                                {globalIdx}
                               </td>
                               <td className="py-3.5 px-2.5">
                                 <div
@@ -1083,6 +1424,8 @@ export default function App() {
                                           onConfirm: async () => {
                                             try {
                                               await deleteDoc(doc(db, 'members', m.docId));
+                                              await deleteMemberPassbook(m.id);
+                                              scheduleSnapshotSync(undefined, 'directory');
                                               showToast('सभासद रेकॉर्ड डिलिट केले.', 'success');
                                             } catch (err) {
                                               handleFirestoreError(
@@ -1108,6 +1451,34 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+
+                {filteredMembers.length > PAGE_SIZE && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-slate-600 no-print">
+                    <span className="font-mono-num font-semibold">
+                      पान {membersPage} / {totalMembersPages} (एकूण {filteredMembers.length} सभासद)
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={membersPage <= 1}
+                        onClick={() => setMembersPage((p) => Math.max(1, p - 1))}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 disabled:opacity-40 font-bold cursor-pointer"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>मागे</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={membersPage >= totalMembersPages}
+                        onClick={() => setMembersPage((p) => Math.min(totalMembersPages, p + 1))}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 disabled:opacity-40 font-bold cursor-pointer"
+                      >
+                        <span>पुढे</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -1124,19 +1495,33 @@ export default function App() {
                     प्रत्येक महिन्याला कर्मचाऱ्यांच्या पगारातून जमा होणाऱ्या वर्गणीची नोंद
                   </p>
                 </div>
-                {isAdmin && (
-                  <button
-                    onClick={() => {
-                      setPreselectedMemberForMonthly(undefined);
-                      setEditingMonthlyContrib(null);
-                      setMonthlyModalOpen(true);
-                    }}
-                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 text-xs font-bold shadow-xs transition cursor-pointer whitespace-nowrap"
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <select
+                    value={monthlyMonthFilter}
+                    onChange={(e) => setMonthlyMonthFilter(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 focus:bg-white focus:border-emerald-600 focus:outline-none"
                   >
-                    <Plus className="w-4 h-4" />
-                    <span>+ नवीन वर्गणी जोडा</span>
-                  </button>
-                )}
+                    <option value="">-- सर्व महिने ({contributions.length}) --</option>
+                    {availableContributionMonths.map((mon) => (
+                      <option key={mon} value={mon}>
+                        {mon}
+                      </option>
+                    ))}
+                  </select>
+                  {isAdmin && (
+                    <button
+                      onClick={() => {
+                        setPreselectedMemberForMonthly(undefined);
+                        setEditingMonthlyContrib(null);
+                        setMonthlyModalOpen(true);
+                      }}
+                      className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 text-xs font-bold shadow-xs transition cursor-pointer whitespace-nowrap"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>+ नवीन वर्गणी जोडा</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="overflow-x-auto rounded-2xl border border-slate-200 shadow-2xs">
@@ -1156,17 +1541,17 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {contributions.length === 0 ? (
+                    {filteredContributions.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="py-10 text-center text-slate-400">
                           कोणतीही मासिक वर्गणी नोंद सापडली नाही.
                         </td>
                       </tr>
                     ) : (
-                      contributions.map((c, idx) => (
+                      paginatedContributions.map((c, idx) => (
                         <tr key={c.docId} className="hover:bg-emerald-50/30 transition-colors">
                           <td className="py-3 px-3 font-mono-num font-bold text-slate-500">
-                            {idx + 1}
+                            {(monthlyPage - 1) * PAGE_SIZE + idx + 1}
                           </td>
                           <td className="py-3 px-3">
                             <span className="inline-block px-2.5 py-0.5 rounded-md bg-blue-600 text-white text-xs font-extrabold font-mono-num shadow-2xs">
@@ -1214,6 +1599,7 @@ export default function App() {
                                           await deleteDoc(
                                             doc(db, 'monthly_contributions', c.docId)
                                           );
+                                          scheduleSnapshotSync(c.memberDocId, 'member');
                                           showToast('वर्गणी नोंद डिलिट केली.', 'success');
                                         } catch (err) {
                                           handleFirestoreError(
@@ -1238,6 +1624,34 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+
+              {filteredContributions.length > PAGE_SIZE && (
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-slate-600 no-print">
+                  <span className="font-mono-num font-semibold">
+                    पान {monthlyPage} / {totalMonthlyPages} (एकूण {filteredContributions.length} नोंदी)
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={monthlyPage <= 1}
+                      onClick={() => setMonthlyPage((p) => Math.max(1, p - 1))}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 disabled:opacity-40 font-bold cursor-pointer"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>मागे</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={monthlyPage >= totalMonthlyPages}
+                      onClick={() => setMonthlyPage((p) => Math.min(totalMonthlyPages, p + 1))}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 disabled:opacity-40 font-bold cursor-pointer"
+                    >
+                      <span>पुढे</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1248,7 +1662,11 @@ export default function App() {
                 <AmortizationScheduleView
                   loan={viewingLoanLedger}
                   emis={emis}
-                  member={members.find((m) => m.docId === viewingLoanLedger.memberDocId)}
+                  member={
+                    loggedInMemberObj?.docId === viewingLoanLedger.memberDocId
+                      ? loggedInMemberObj
+                      : members.find((m) => m.docId === viewingLoanLedger.memberDocId)
+                  }
                   onClose={() => setViewingLoanLedger(null)}
                   isAdmin={isAdmin}
                   onPayEmiClick={(ln, targetMonth, targetDate) => {
@@ -1311,7 +1729,10 @@ export default function App() {
                               (l) => !loggedInMemberId || l.memberDocId === loggedInMemberId
                             )
                             .map((l, idx) => {
-                              const mem = members.find((m) => m.docId === l.memberDocId);
+                              const mem =
+                                loggedInMemberObj?.docId === l.memberDocId
+                                  ? loggedInMemberObj
+                                  : members.find((m) => m.docId === l.memberDocId);
                               const balance = computeDayWiseLoanSchedule(l, emis).remainingPrincipal;
                               const isClosed = l.status === 'Closed' || balance === 0;
 
@@ -1359,7 +1780,7 @@ export default function App() {
                                     </span>
                                   </td>
                                   <td className="py-3 px-3 text-center">
-                                    <div className="flex items-center justify-center gap-1.5">
+                                    <div className="flex flex-wrap items-center justify-center gap-1.5">
                                       {isAdmin && !isClosed && (
                                         <button
                                           onClick={() => {
@@ -1377,6 +1798,39 @@ export default function App() {
                                         className="px-2.5 py-1.5 rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-[11px] font-bold cursor-pointer whitespace-nowrap"
                                       >
                                         लेजर / शेड्यूल
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setViewingLoanLedger(l);
+                                          setTimeout(() => window.print(), 250);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                                        title="EMI शेड्यूल प्रिंट काढा"
+                                      >
+                                        <Printer className="w-3.5 h-3.5" />
+                                        <span>प्रिंट</span>
+                                      </button>
+                                      <button
+                                        disabled={downloadingLoanPdfId === l.docId}
+                                        onClick={async () => {
+                                          setDownloadingLoanPdfId(l.docId);
+                                          try {
+                                            const sched = computeDayWiseLoanSchedule(l, emis);
+                                            await downloadLoanSchedulePdf(l, sched, mem);
+                                            showToast('EMI शेड्यूल PDF डाउनलोड झाली! 📥', 'success');
+                                          } catch {
+                                            showToast('PDF तयार करताना अडचण आली.', 'error');
+                                          } finally {
+                                            setDownloadingLoanPdfId(null);
+                                          }
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                                        title="EMI शेड्यूल PDF डाउनलोड करा"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                        <span>
+                                          {downloadingLoanPdfId === l.docId ? '...' : 'PDF'}
+                                        </span>
                                       </button>
                                     </div>
                                   </td>
@@ -1401,6 +1855,7 @@ export default function App() {
                                               onConfirm: async () => {
                                                 try {
                                                   await deleteDoc(doc(db, 'loans', l.docId));
+                                                  scheduleSnapshotSync(l.memberDocId, 'member');
                                                   showToast('कर्ज रेकॉर्ड डिलिट केले.', 'success');
                                                 } catch (err) {
                                                   handleFirestoreError(
@@ -1571,7 +2026,45 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB 5: EXCLUSIVE MEMBER PORTAL */}
+          {/* TAB 5: SOCIETY EXECUTIVE COMMITTEE & MEMBERS PHOTO DIRECTORY */}
+          {activeTab === 'directory' && (
+            directoryLoading && !isAdmin ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center text-sm font-semibold text-slate-500">
+                संस्थेची कार्यकारिणी व सभासद यादी लोड होत आहे...
+              </div>
+            ) : (
+              <SocietyDirectoryTab
+                members={isAdmin ? members : directoryMembers}
+                committeeMembers={isAdmin ? committeeMembers : directoryCommittee}
+                isAdmin={isAdmin}
+                onViewMember={(m) => {
+                  if (isAdmin) setViewingMember(m);
+                }}
+                onDeleteCommitteeMember={(cm) =>
+                  setConfirmDelete({
+                    title: `"${cm.name}" (${cm.societyPost}) यांना कार्यकारिणी यादीतून डिलिट करायचे का?`,
+                    onConfirm: async () => {
+                      try {
+                        await deleteDoc(doc(db, 'committee_members', cm.docId));
+                        scheduleSnapshotSync(undefined, 'directory');
+                        showToast('पदाधिकारी नोंद डिलिट केली.', 'success');
+                      } catch (err) {
+                        handleFirestoreError(
+                          err,
+                          OperationType.DELETE,
+                          `committee_members/${cm.docId}`
+                        );
+                      }
+                    },
+                  })
+                }
+                onNotify={showToast}
+                onMutated={(memberDocId, scope) => scheduleSnapshotSync(memberDocId, scope || 'directory')}
+              />
+            )
+          )}
+
+          {/* TAB 6: EXCLUSIVE MEMBER PORTAL */}
           {activeTab === 'memberPortal' && loggedInMemberObj && (
             <MemberPortalView
               member={loggedInMemberObj}
@@ -1590,6 +2083,7 @@ export default function App() {
         onClose={() => setMemberModalOpen(false)}
         editingMember={editingMember}
         onNotify={showToast}
+        onMutated={(memberDocId, scope) => scheduleSnapshotSync(memberDocId, scope || 'all')}
       />
 
       <MonthlyContributionModal
@@ -1603,6 +2097,7 @@ export default function App() {
         preselectedMemberDocId={preselectedMemberForMonthly}
         editingContribution={editingMonthlyContrib}
         onNotify={showToast}
+        onMutated={(memberDocId) => scheduleSnapshotSync(memberDocId, 'member')}
       />
 
       <LoanSanctionModal
@@ -1610,6 +2105,7 @@ export default function App() {
         onClose={() => setLoanModalOpen(false)}
         members={members}
         onNotify={showToast}
+        onMutated={(memberDocId) => scheduleSnapshotSync(memberDocId, 'member')}
       />
 
       <PayEmiModal
@@ -1623,6 +2119,7 @@ export default function App() {
         defaultMonth={payEmiDefaultMonth}
         defaultDate={payEmiDefaultDate}
         onNotify={showToast}
+        onMutated={(memberDocId) => scheduleSnapshotSync(memberDocId, 'member')}
       />
 
       <CloseLoanModal
@@ -1631,6 +2128,7 @@ export default function App() {
         loan={closeLoanModalTarget?.loan || null}
         currentBalance={closeLoanModalTarget?.balance || 0}
         onNotify={showToast}
+        onMutated={(memberDocId) => scheduleSnapshotSync(memberDocId, 'member')}
       />
 
       <ExpenseFormModal
@@ -1659,6 +2157,7 @@ export default function App() {
             onConfirm: async () => {
               try {
                 await deleteDoc(doc(db, 'monthly_contributions', c.docId));
+                scheduleSnapshotSync(c.memberDocId, 'member');
                 showToast('वर्गणी नोंद यशस्वीरित्या डिलिट केली.', 'success');
               } catch (err) {
                 handleFirestoreError(
@@ -1681,6 +2180,7 @@ export default function App() {
         emis={emis}
         expenses={expenses}
         onSeedSampleData={handleSeedData}
+        onSyncAllSnapshots={handleSyncAllSnapshots}
         onNotify={showToast}
       />
 

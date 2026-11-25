@@ -16,6 +16,7 @@ interface LoanSanctionModalProps {
   onClose: () => void;
   members: Member[];
   onNotify: (msg: string, type?: 'success' | 'error') => void;
+  onMutated?: (memberDocId?: string) => void;
 }
 
 export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
@@ -23,6 +24,7 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
   onClose,
   members,
   onNotify,
+  onMutated,
 }) => {
   const todayStr = new Date().toISOString().split('T')[0];
   const [loanDate, setLoanDate] = useState(todayStr);
@@ -76,6 +78,7 @@ export const LoanSanctionModal: React.FC<LoanSanctionModalProps> = ({
         status: 'Active',
         ownerId: SOCIETY_OWNER_ID,
       });
+      onMutated?.(selectedMember.docId);
       onNotify('नवीन कर्ज यशस्वीरित्या मंजूर व जतन केले! ⚡', 'success');
       onClose();
     } catch (error) {
@@ -278,6 +281,7 @@ interface PayEmiModalProps {
   defaultMonth?: string;
   defaultDate?: string;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
+  onMutated?: (memberDocId?: string) => void;
 }
 
 export const PayEmiModal: React.FC<PayEmiModalProps> = ({
@@ -288,6 +292,7 @@ export const PayEmiModal: React.FC<PayEmiModalProps> = ({
   defaultMonth,
   defaultDate,
   onNotify,
+  onMutated,
 }) => {
   const todayStr = new Date().toISOString().split('T')[0];
   const [date, setDate] = useState(todayStr);
@@ -392,6 +397,7 @@ export const PayEmiModal: React.FC<PayEmiModalProps> = ({
         photo: photo.slice(0, 800000),
         ownerId: SOCIETY_OWNER_ID,
       });
+      onMutated?.(loan.memberDocId);
       onNotify('कर्ज हप्ता (EMI) यशस्वीरित्या जमा झाला! ✅', 'success');
       onClose();
     } catch (error) {
@@ -559,6 +565,7 @@ interface CloseLoanModalProps {
   loan: Loan | null;
   currentBalance: number;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
+  onMutated?: (memberDocId?: string) => void;
 }
 
 export const CloseLoanModal: React.FC<CloseLoanModalProps> = ({
@@ -567,6 +574,7 @@ export const CloseLoanModal: React.FC<CloseLoanModalProps> = ({
   loan,
   currentBalance,
   onNotify,
+  onMutated,
 }) => {
   const todayStr = new Date().toISOString().split('T')[0];
   const [closureDate, setClosureDate] = useState(todayStr);
@@ -594,6 +602,7 @@ export const CloseLoanModal: React.FC<CloseLoanModalProps> = ({
         closureAmount: Math.max(0, Number(closureAmount) || 0),
         closureRemarks: closureRemarks.trim().slice(0, 250),
       });
+      onMutated?.(loan.memberDocId);
       onNotify('कर्ज खाते यशस्वीरित्या बंद करण्यात आले! 🔒', 'success');
       onClose();
     } catch (error) {

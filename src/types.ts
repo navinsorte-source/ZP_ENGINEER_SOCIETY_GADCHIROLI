@@ -18,6 +18,19 @@ export interface Member {
   nominee: string;
   nomineeRelation: string;
   share: number;
+  societyPost?: string;
+  ownerId: string;
+}
+
+export interface CommitteeMember {
+  docId: string;
+  name: string;
+  societyPost: string;
+  officeDesignation?: string;
+  mobile?: string;
+  photo?: string;
+  displayOrder: number;
+  memberDocId?: string;
   ownerId: string;
 }
 
@@ -80,5 +93,47 @@ export interface Expense {
   amount: number;
   mode: 'Cash' | 'Bank Transfer' | 'Cheque' | 'UPI';
   photo?: string;
+  ownerId: string;
+}
+
+export interface MemberPassbook {
+  docId: string;
+  memberDocId: string;
+  memberId: string;
+  loginPass: string;
+  member: Omit<Member, 'loginPass' | 'aadhaar'>;
+  contributions: MonthlyContribution[];
+  loans: Loan[];
+  emis: LoanEmi[];
+  updatedAt: string;
+  ownerId: string;
+}
+
+export interface DirectoryMemberItem {
+  docId: string;
+  id: string;
+  name: string;
+  designation: string;
+  societyPost?: string;
+  status: 'Active' | 'Inactive';
+  photo?: string;
+}
+
+export interface DirectoryCommitteeItem {
+  docId: string;
+  name: string;
+  societyPost: string;
+  officeDesignation?: string;
+  photo?: string;
+  displayOrder: number;
+  memberDocId?: string;
+}
+
+export interface DirectoryChunk {
+  docId: string;
+  chunkType: 'members' | 'committee';
+  chunkIndex: number;
+  items: (DirectoryMemberItem | DirectoryCommitteeItem)[];
+  updatedAt: string;
   ownerId: string;
 }

@@ -30,6 +30,10 @@
 }
 
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
   .no-print {
     display: none !important;
   }
@@ -38,6 +42,10 @@
   }
   body {
     background: #ffffff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  tr {
+    break-inside: avoid;
   }
 }
-

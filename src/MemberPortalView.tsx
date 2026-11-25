@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
-  User,
   Phone,
   Mail,
   Building2,
@@ -13,8 +12,6 @@ import {
   CheckCircle2,
   Printer,
 } from 'lucide-react';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './firebase';
 import { Loan, LoanEmi, Member, MonthlyContribution } from './types';
 import { calculateAge, parseMonthYear } from './utils';
 import { AmortizationScheduleView } from './AmortizationScheduleView';
@@ -25,7 +22,7 @@ interface MemberPortalViewProps {
   contributions: MonthlyContribution[];
   loans: Loan[];
   emis: LoanEmi[];
-  onNotify: (msg: string, type?: 'success' | 'error') => void;
+  onNotify?: (msg: string, type?: 'success' | 'error') => void;
 }
 
 export const MemberPortalView: React.FC<MemberPortalViewProps> = ({
@@ -33,49 +30,13 @@ export const MemberPortalView: React.FC<MemberPortalViewProps> = ({
   contributions,
   loans,
   emis,
-  onNotify,
 }) => {
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [isUpdatingPass, setIsUpdatingPass] = useState(false);
-
   const memberContribs = contributions
     .filter((c) => c.memberDocId === member.docId)
     .sort((a, b) => parseMonthYear(b.month).getTime() - parseMonthYear(a.month).getTime());
 
   const totalContribSum = memberContribs.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
   const memberLoans = loans.filter((l) => l.memberDocId === member.docId);
-
-  const handlePasswordChange = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const currentStoredPass = member.loginPass || '123456';
-    if (!oldPassword.trim() || !newPassword.trim()) {
-      onNotify('कृपया जुना आणि नवीन पासवर्ड दोन्ही भरा!', 'error');
-      return;
-    }
-    if (oldPassword.trim() !== currentStoredPass) {
-      onNotify('चुकीचा जुना पासवर्ड! कृपया योग्य जुना पासवर्ड टाका.', 'error');
-      return;
-    }
-    if (newPassword.trim().length < 4) {
-      onNotify('नवीन पासवर्ड किमान ४ अक्षरांचा असावा.', 'error');
-      return;
-    }
-
-    setIsUpdatingPass(true);
-    try {
-      await updateDoc(doc(db, 'members', member.docId), {
-        loginPass: newPassword.trim(),
-      });
-      setOldPassword('');
-      setNewPassword('');
-      onNotify('पासवर्ड यशस्वीरित्या बदलला गेला आहे! ✅', 'success');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `members/${member.docId}`);
-    } finally {
-      setIsUpdatingPass(false);
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -239,44 +200,23 @@ export const MemberPortalView: React.FC<MemberPortalViewProps> = ({
               <KeyRound className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-900">पासवर्ड बदला</h3>
-              <p className="text-xs text-slate-500">तुमचा वैयक्तिक लॉगिन पासवर्ड अपडेट करा</p>
+              <h3 className="text-base font-bold text-slate-900">पासवर्ड व खाते सुरक्षा</h3>
+              <p className="text-xs text-slate-500">लॉगिन पासवर्ड सुरक्षित ठेवण्याची माहिती</p>
             </div>
           </div>
 
-          <form onSubmit={handlePasswordChange} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                जुना पासवर्ड (Old Password)
-              </label>
-              <input
-                type="password"
-                value={oldPassword}
-                onChange={(e) => setOldPassword(e.target.value)}
-                placeholder="जुना पासवर्ड टाका"
-                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm focus:bg-white focus:border-blue-600 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                नवीन पासवर्ड (New Password)
-              </label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="नवीन पासवर्ड टाका"
-                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm focus:bg-white focus:border-blue-600 focus:outline-none"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={isUpdatingPass}
-              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 py-2.5 text-sm font-semibold text-white shadow-xs transition cursor-pointer"
-            >
-              {isUpdatingPass ? 'अपडेट होत आहे...' : 'पासवर्ड अपडेट करा'}
-            </button>
-          </form>
+          <div className="rounded-xl bg-indigo-50/70 border border-indigo-200 p-4 space-y-2.5 text-xs text-slate-700 leading-relaxed">
+            <p className="font-bold text-indigo-900">
+              🔒 सभासद डेटा सुरक्षेसाठी पासवर्ड बदलण्याचे अधिकार केवळ संस्थेच्या अ‍ॅडमिनकडे सुरक्षित ठेवले आहेत.
+            </p>
+            <p>
+              तुम्हाला तुमचा लॉगिन पासवर्ड बदलायचा असल्यास किंवा विसरल्यास, कृपया संस्थेचे{' '}
+              <strong className="text-slate-900">अध्यक्ष / सचिव (Admin)</strong> यांच्याशी संपर्क साधा.
+            </p>
+            <p className="text-[11px] text-slate-500 pt-1">
+              सभासद आयडी: <span className="font-mono-num font-bold text-slate-800">{member.id}</span>
+            </p>
+          </div>
         </div>
       </div>
 

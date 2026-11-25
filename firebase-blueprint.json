@@ -23,6 +23,7 @@
         "nominee": { "type": "string", "maxLength": 120 },
         "nomineeRelation": { "type": "string", "maxLength": 64 },
         "share": { "type": "number" },
+        "societyPost": { "type": "string", "maxLength": 80 },
         "ownerId": { "type": "string", "maxLength": 128 }
       },
       "required": ["id", "name", "designation", "dob", "joiningDate", "status", "share", "ownerId"]
@@ -104,6 +105,52 @@
         "ownerId": { "type": "string", "maxLength": 128 }
       },
       "required": ["voucherNo", "date", "category", "description", "amount", "mode", "ownerId"]
+    },
+    "CommitteeMember": {
+      "title": "CommitteeMember",
+      "description": "Society executive committee office bearer (President, Secretary, etc.) with manual name, post, and photo",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 120 },
+        "societyPost": { "type": "string", "maxLength": 80 },
+        "officeDesignation": { "type": "string", "maxLength": 100 },
+        "mobile": { "type": "string", "maxLength": 24 },
+        "photo": { "type": "string", "maxLength": 800000 },
+        "displayOrder": { "type": "number" },
+        "memberDocId": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["name", "societyPost", "displayOrder", "ownerId"]
+    },
+    "MemberPassbook": {
+      "title": "MemberPassbook",
+      "description": "Pre-aggregated single-document snapshot of a member's profile, contributions, loans, and EMIs for 1-read member login",
+      "type": "object",
+      "properties": {
+        "memberDocId": { "type": "string", "maxLength": 128 },
+        "memberId": { "type": "string", "maxLength": 32 },
+        "loginPass": { "type": "string", "maxLength": 64 },
+        "member": { "type": "object" },
+        "contributions": { "type": "array" },
+        "loans": { "type": "array" },
+        "emis": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 48 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["memberDocId", "memberId", "loginPass", "member", "contributions", "loans", "emis", "updatedAt", "ownerId"]
+    },
+    "DirectoryChunk": {
+      "title": "DirectoryChunk",
+      "description": "Chunked public directory snapshot of up to 30 members or committee members (no PII) for low-read directory loading",
+      "type": "object",
+      "properties": {
+        "chunkType": { "type": "string", "enum": ["members", "committee"] },
+        "chunkIndex": { "type": "number" },
+        "items": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 48 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["chunkType", "chunkIndex", "items", "updatedAt", "ownerId"]
     }
   },
   "firestore": {
@@ -126,6 +173,18 @@
     "/expenses/{expenseId}": {
       "schema": { "$ref": "#/entities/Expense" },
       "description": "Digital vouchers and society expenses"
+    },
+    "/committee_members/{committeeId}": {
+      "schema": { "$ref": "#/entities/CommitteeMember" },
+      "description": "Society office bearers and executive committee members"
+    },
+    "/member_passbooks/{passbookId}": {
+      "schema": { "$ref": "#/entities/MemberPassbook" },
+      "description": "Scoped member passbook snapshots keyed by Member ID"
+    },
+    "/directory_chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/DirectoryChunk" },
+      "description": "Chunked public photo directory snapshots"
     }
   }
 }

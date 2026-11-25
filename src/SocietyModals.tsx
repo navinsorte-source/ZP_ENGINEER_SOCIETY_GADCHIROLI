@@ -11,6 +11,7 @@ interface MemberModalProps {
   onClose: () => void;
   editingMember: Member | null;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
+  onMutated?: (memberDocId?: string, scope?: 'member' | 'directory' | 'all') => void;
 }
 
 export const MemberFormModal: React.FC<MemberModalProps> = ({
@@ -18,6 +19,7 @@ export const MemberFormModal: React.FC<MemberModalProps> = ({
   onClose,
   editingMember,
   onNotify,
+  onMutated,
 }) => {
   const todayStr = new Date().toISOString().split('T')[0];
   const [id, setId] = useState('');
@@ -129,9 +131,11 @@ export const MemberFormModal: React.FC<MemberModalProps> = ({
     try {
       if (editingMember) {
         await updateDoc(doc(db, 'members', editingMember.docId), payload);
+        onMutated?.(editingMember.docId, 'all');
         onNotify('सभासद माहिती यशस्वीरित्या अपडेट झाली! ✅', 'success');
       } else {
-        await addDoc(collection(db, 'members'), payload);
+        const docRef = await addDoc(collection(db, 'members'), payload);
+        onMutated?.(docRef.id, 'all');
         onNotify('नवीन सभासद यशस्वीरित्या जोडला गेला! ✅', 'success');
       }
       onClose();
@@ -449,6 +453,7 @@ interface MonthlyModalProps {
   preselectedMemberDocId?: string;
   editingContribution?: MonthlyContribution | null;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
+  onMutated?: (memberDocId?: string) => void;
 }
 
 export const MonthlyContributionModal: React.FC<MonthlyModalProps> = ({
@@ -458,6 +463,7 @@ export const MonthlyContributionModal: React.FC<MonthlyModalProps> = ({
   preselectedMemberDocId,
   editingContribution,
   onNotify,
+  onMutated,
 }) => {
   const todayStr = new Date().toISOString().split('T')[0];
   const [receiptNo, setReceiptNo] = useState('');
@@ -508,6 +514,7 @@ export const MonthlyContributionModal: React.FC<MonthlyModalProps> = ({
           amount: Math.max(0, Number(amount) || 0),
           note: (note.trim() || '').slice(0, 200),
         });
+        onMutated?.(editingContribution.memberDocId);
         onNotify('मासिक वर्गणी नोंद यशस्वीरित्या सुधारली! ✅', 'success');
       } else {
         await addDoc(collection(db, 'monthly_contributions'), {
@@ -521,6 +528,7 @@ export const MonthlyContributionModal: React.FC<MonthlyModalProps> = ({
           note: (note.trim() || '').slice(0, 200),
           ownerId: SOCIETY_OWNER_ID,
         });
+        onMutated?.(selectedMember.docId);
         onNotify('मासिक वर्गणी यशस्वीरित्या जतन केली! ✅', 'success');
       }
       onClose();
